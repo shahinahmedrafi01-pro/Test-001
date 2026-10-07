@@ -1,0 +1,34 @@
+name: Minecraft Bot 24/7
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours (UTC)
+  workflow_dispatch: {} # manual start from the Actions tab
+
+concurrency:
+  group: mc-bot
+  cancel-in-progress: true # new run replaces the old one, no duplicate logins
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # ~5h50m, then the next scheduled run takes over
+    defaults:
+      run:
+        working-directory: mc-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Run bot
+        run: node bot.js
+        env:
+          MC_HOST: mc.havencraft.pro
+          MC_PORT: 2566
+          MC_USER: Madara_1ea
+          MC_LOGIN_CMD: ${{ secrets.MC_LOGIN_CMD }}
