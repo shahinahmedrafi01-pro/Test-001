@@ -1,5 +1,5 @@
 # Test 001
 
-Simple calculator website built as a test project.
+BlockCraft 2D — a Minecraft Bedrock-style 2D sandbox web game in a single HTML file.
 
-Live site via GitHub Pages.
+Play: https://shahinahmedrafi01-pro.github.io/Test-001/
