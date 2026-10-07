@@ -11,9 +11,26 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
+log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`);
+
 let failCount = 0;
 let bot = null;
 let afkTimer = null;
+let lastLoginSent = 0;
+
+function sendLogin() {
+  if (!config.loginCommand) {
+    log('Cannot login: MC_LOGIN_CMD secret is not set!');
+    return;
+  }
+  const now = Date.now();
+  if (now - lastLoginSent < 10000) return; // don't spam
+  lastLoginSent = now;
+  try {
+    bot.chat(config.loginCommand);
+    log('Sent login command.');
+  } catch (e) { log('Login chat failed: ' + e.message); }
+}
 
 function startBot() {
   log(`Connecting as ${config.username} to ${config.host}:${config.port} (fails so far: ${failCount})`);
@@ -27,20 +44,22 @@ function startBot() {
   bot.on('spawn', () => {
     log(`Spawned. Server version: ${bot.version}`);
     failCount = 0;
-    setTimeout(() => {
-      try {
-        if (config.loginCommand) {
-          bot.chat(config.loginCommand);
-          log('Sent login command.');
-        }
-      } catch (e) { log('Login chat failed: ' + e.message); }
-    }, 4000);
+    lastLoginSent = 0;
+    setTimeout(sendLogin, 4000);
+    // retry login a few times in case the auth plugin was slow
+    setTimeout(sendLogin, 12000);
+    setTimeout(sendLogin, 25000);
     startAntiAfk();
   });
 
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
     log(`<${username}> ${message}`);
+    // AuthMe-style prompt -> send login right away
+    if (/\/login|please login|log in/i.test(message)) {
+      log('Server asked for login, sending command...');
+      setTimeout(sendLogin, 1500);
+    }
   });
 
   bot.on('kicked', (reason) => {
