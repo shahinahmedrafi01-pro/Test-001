@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calculator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="calculator" aria-label="Calculator">
+    <h1>Calculator</h1>
+    <input id="display" type="text" readonly aria-label="Display" value="0">
+    <div class="keys">
+      <button data-key="C" class="fn">C</button>
+      <button data-key="⌫" class="fn">⌫</button>
+      <button data-key="%" class="fn">%</button>
+      <button data-key="/" class="op">÷</button>
+
+      <button data-key="7">7</button>
+      <button data-key="8">8</button>
+      <button data-key="9">9</button>
+      <button data-key="*" class="op">×</button>
+
+      <button data-key="4">4</button>
+      <button data-key="5">5</button>
+      <button data-key="6">6</button>
+      <button data-key="-" class="op">−</button>
+
+      <button data-key="1">1</button>
+      <button data-key="2">2</button>
+      <button data-key="3">3</button>
+      <button data-key="+" class="op">+</button>
+
+      <button data-key="0" class="zero">0</button>
+      <button data-key=".">.</button>
+      <button data-key="=" class="eq">=</button>
+    </div>
+    <p class="hint">Keyboard supported — test project 001</p>
+  </main>
+  <script src="script.js"></script>
+</body>
+</html>
