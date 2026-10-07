@@ -1,0 +1,1 @@
+{"dependencies":{"mineflayer":"^4.25.0"},"description":"24/7 Minecraft bot (Mineflayer) run via GitHub Actions","main":"bot.js","name":"mc-bot","private":true,"scripts":{"start":"node bot.js"},"version":"1.0.0"}
