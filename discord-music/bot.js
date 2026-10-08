@@ -51,11 +51,30 @@ function killProcs() {
   procs = null;
 }
 
-// yt-dlp extracts YouTube audio -> ffmpeg converts to raw PCM -> Discord plays it
+// Build yt-dlp args: player clients that bypass YouTube's datacenter IP
+// "Sign in to confirm you're not a bot" check, plus optional authenticated
+// cookies (YT_COOKIES secret) which is the most reliable fix.
+const COOKIE_FILE = path.join(__dirname, '.yt-cookies.txt');
+
+function ytDlpArgs(url) {
+  const args = ['--no-playlist', '--no-warnings', '--no-progress',
+    '--extractor-args', 'youtube:player_client=android,ios,web'];
+  if (process.env.YT_COOKIES) {
+    try {
+      fs.writeFileSync(COOKIE_FILE, process.env.YT_COOKIES);
+      args.push('--cookies', COOKIE_FILE);
+      console.log('Using YouTube cookies for extraction.');
+    } catch (e) { console.error('Could not write cookies file:', e.message); }
+  }
+  args.push('-f', 'bestaudio/best', '-o', '-', url);
+  return args;
+}
+
+// yt-dlp extracts YouTube audio -> ffmpeg converts to Ogg/Opus -> Discord plays it
 function spawnAudio(url) {
   const ytdlp = spawn(
     'yt-dlp',
-    ['--no-playlist', '--no-warnings', '--no-progress', '-f', 'bestaudio/best', '-o', '-', url],
+    ytDlpArgs(url),
     { stdio: ['ignore', 'pipe', 'pipe'] }
   );
   const ffmpeg = spawn(
