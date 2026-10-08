@@ -131,22 +131,25 @@ async function greetIfPlayerNear() {
   behaviorBusy = true;
   try {
     await bot.lookAt(p.entity.position.offset(0, 1.5, 0));
-    log(`Greeting ${p.username}: looking + crouch.`);
+    log(`Greeting ${p.username}: looking + double-crouch.`);
     await sleep(500);
-    bot.setControlState('sneak', true);
-    await sleep(900);
-    bot.setControlState('sneak', false);
+    for (let i = 0; i < 2; i++) {
+      bot.setControlState('sneak', true);
+      await sleep(700);
+      bot.setControlState('sneak', false);
+      await sleep(700);
+    }
   } catch (e) { /* ignore */ }
   behaviorBusy = false;
 }
 
 function startBehavior() {
   clearBehavior();
-  // every 5 minutes: crouch twice (sit-stand, sit-stand)
-  behaviorTimers.push(setInterval(() => doubleCrouch(), 5 * 60 * 1000));
-  // every 3 seconds: if a player is within 6 blocks, look at them + crouch once
+  // every 2 minutes: crouch twice (sit-stand, sit-stand)
+  behaviorTimers.push(setInterval(() => doubleCrouch(), 2 * 60 * 1000));
+  // every 3 seconds: if a player is within 6 blocks, look at them + double-crouch
   behaviorTimers.push(setInterval(() => greetIfPlayerNear(), 3000));
-  log('Behavior timers started (double-crouch every 5 min, greet nearby players).');
+  log('Behavior timers started (double-crouch every 2 min, greet nearby players).');
 }
 function clearBehavior() {
   behaviorTimers.forEach(clearInterval);
