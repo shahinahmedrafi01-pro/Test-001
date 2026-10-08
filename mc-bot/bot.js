@@ -87,7 +87,7 @@ function startAntiAfk() {
       const pitch = (Math.random() - 0.5) * 0.4;
       bot.look(yaw, pitch, true);
     } catch (e) { /* ignore */ }
-  }, 45000);
+  }, 30000);
 }
 
 /* ---------- lively behavior: crouch + greet ---------- */
