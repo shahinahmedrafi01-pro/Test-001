@@ -35,6 +35,10 @@ Repo → **Settings → Secrets and variables → Actions**:
 
 - **Secrets** tab → New repository secret → Name: `DISCORD_TOKEN`, Value: the bot token.
 - **Variables** tab → New repository variable → Name: `VOICE_CHANNEL_ID`, Value: the channel ID.
+- *(Optional, only if YouTube blocks audio extraction with "Sign in to confirm you're not a bot"):
+  export your YouTube cookies to a `cookies.txt` file (e.g. with the "Get cookies.txt LOCALLY"
+  browser extension while logged into YouTube), then add it as a secret named `YT_COOKIES`
+  (paste the whole file content as the value). The bot will use it to authenticate yt-dlp.*
 
 ### 5. Add the workflow file
 
@@ -96,6 +100,7 @@ jobs:
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           VOICE_CHANNEL_ID: ${{ vars.VOICE_CHANNEL_ID }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }} # optional; only needed if YouTube blocks extraction (see section 4)
 
       - name: Save loop state
         if: always()
