@@ -1,0 +1,1 @@
+{"dependencies":{"@discordjs/voice":"^0.18.0","discord.js":"^14.16.3","libsodium-wrappers":"^0.7.13"},"description":"24/7 Discord music bot — nonstop YouTube audio loop","main":"bot.js","name":"discord-music-247","private":true,"scripts":{"start":"node bot.js"},"version":"1.0.0"}
