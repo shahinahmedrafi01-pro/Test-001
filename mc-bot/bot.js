@@ -10,12 +10,14 @@ const config = {
 function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`);
 
 let failCount = 0;
 let bot = null;
 let afkTimer = null;
+let behaviorTimers = [];
 let lastLoginSent = 0;
 
 function sendLogin() {
@@ -50,6 +52,7 @@ function startBot() {
     setTimeout(sendLogin, 12000);
     setTimeout(sendLogin, 25000);
     startAntiAfk();
+    startBehavior();
   });
 
   bot.on('chat', (username, message) => {
@@ -74,10 +77,11 @@ function startBot() {
   });
 }
 
+/* ---------- anti-AFK: gentle look-around ---------- */
 function startAntiAfk() {
   if (afkTimer) clearInterval(afkTimer);
   afkTimer = setInterval(() => {
-    if (!bot || !bot.entity) return;
+    if (!bot || !bot.entity || behaviorBusy) return;
     try {
       const yaw = bot.entity.yaw + (Math.random() - 0.5) * 1.2;
       const pitch = (Math.random() - 0.5) * 0.4;
@@ -86,8 +90,74 @@ function startAntiAfk() {
   }, 45000);
 }
 
+/* ---------- lively behavior: crouch + greet ---------- */
+let behaviorBusy = false;
+const greetCooldown = {}; // username -> last greet timestamp
+
+async function doubleCrouch() {
+  if (behaviorBusy || !bot || !bot.entity) return;
+  behaviorBusy = true;
+  try {
+    for (let i = 0; i < 2; i++) {
+      bot.setControlState('sneak', true);
+      await sleep(700);
+      bot.setControlState('sneak', false);
+      await sleep(700);
+    }
+    log('Did double-crouch.');
+  } catch (e) { /* ignore */ }
+  behaviorBusy = false;
+}
+
+function nearestPlayer(maxDist) {
+  let best = null, bestD = maxDist;
+  for (const name of Object.keys(bot.players)) {
+    if (name === bot.username) continue;
+    const p = bot.players[name];
+    if (!p || !p.entity || !bot.entity) continue;
+    const d = bot.entity.position.distanceTo(p.entity.position);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+async function greetIfPlayerNear() {
+  if (behaviorBusy || !bot || !bot.entity) return;
+  const p = nearestPlayer(6);
+  if (!p) return;
+  const now = Date.now();
+  if (now - (greetCooldown[p.username] || 0) < 60000) return; // once per minute per player
+  greetCooldown[p.username] = now;
+  behaviorBusy = true;
+  try {
+    await bot.lookAt(p.entity.position.offset(0, 1.5, 0));
+    log(`Greeting ${p.username}: looking + crouch.`);
+    await sleep(500);
+    bot.setControlState('sneak', true);
+    await sleep(900);
+    bot.setControlState('sneak', false);
+  } catch (e) { /* ignore */ }
+  behaviorBusy = false;
+}
+
+function startBehavior() {
+  clearBehavior();
+  // every 5 minutes: crouch twice (sit-stand, sit-stand)
+  behaviorTimers.push(setInterval(() => doubleCrouch(), 5 * 60 * 1000));
+  // every 3 seconds: if a player is within 6 blocks, look at them + crouch once
+  behaviorTimers.push(setInterval(() => greetIfPlayerNear(), 3000));
+  log('Behavior timers started (double-crouch every 5 min, greet nearby players).');
+}
+function clearBehavior() {
+  behaviorTimers.forEach(clearInterval);
+  behaviorTimers = [];
+  behaviorBusy = false;
+}
+
+/* ---------- reconnect logic ---------- */
 function scheduleReconnect() {
   if (afkTimer) { clearInterval(afkTimer); afkTimer = null; }
+  clearBehavior();
   try { if (bot) bot.quit(); } catch (e) {}
   bot = null;
   failCount++;
