@@ -1,0 +1,53 @@
+name: Discord Music 24/7
+
+on:
+  schedule:
+    - cron: "15 */6 * * *" # every 6 hours (UTC), offset from the MC bot
+  workflow_dispatch: {}
+
+concurrency:
+  group: discord-music
+  cancel-in-progress: true # new run replaces the old one
+
+jobs:
+  music:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: discord-music
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Install ffmpeg and yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install -q yt-dlp
+
+      - name: Restore loop state
+        uses: actions/cache/restore@v4
+        with:
+          path: discord-music/now-playing.txt
+          key: music-loop-restore
+          restore-keys: |
+            music-loop-
+
+      - name: Run bot
+        run: node bot.js
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          VOICE_CHANNEL_ID: ${{ vars.VOICE_CHANNEL_ID }}
+
+      - name: Save loop state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: discord-music/now-playing.txt
+          key: music-loop-${{ github.run_id }}-${{ github.run_attempt }}
