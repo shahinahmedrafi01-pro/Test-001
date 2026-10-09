@@ -44,6 +44,7 @@ jobs:
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           VOICE_CHANNEL_ID: ${{ vars.VOICE_CHANNEL_ID }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
 
       - name: Save loop state
         if: always()
