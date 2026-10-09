@@ -19,6 +19,7 @@ let bot = null;
 let afkTimer = null;
 let behaviorTimers = [];
 let lastLoginSent = 0;
+const hiiCooldown = {}; // username -> last !hii trigger timestamp
 
 function sendLogin() {
   if (!config.loginCommand) {
@@ -62,6 +63,16 @@ function startBot() {
     if (/\/login|please login|log in/i.test(message)) {
       log('Server asked for login, sending command...');
       setTimeout(sendLogin, 1500);
+    }
+    // !hii command -> bot says "hii" (15s cooldown per user to avoid spam)
+    if (message.trim().toLowerCase() === '!hii') {
+      const now = Date.now();
+      if (now - (hiiCooldown[username] || 0) < 15000) return;
+      hiiCooldown[username] = now;
+      try {
+        bot.chat('hii');
+        log(`Said hii (triggered by ${username}).`);
+      } catch (e) { log('hii reply failed: ' + e.message); }
     }
   });
 
