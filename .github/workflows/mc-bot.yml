@@ -32,3 +32,6 @@ jobs:
           MC_PORT: 2566
           MC_USER: Madara_1ea
           MC_LOGIN_CMD: ${{ secrets.MC_LOGIN_CMD }}
+          DISCORD_MC_TOKEN: ${{ secrets.DISCORD_MC_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_OWNER_ID: ${{ secrets.DISCORD_OWNER_ID }}
