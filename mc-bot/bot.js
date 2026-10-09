@@ -5,6 +5,10 @@ const config = {
   port: parseInt(process.env.MC_PORT || '2566', 10),
   username: process.env.MC_USER || 'Madara_1ea',
   loginCommand: process.env.MC_LOGIN_CMD || '',
+  // Discord bridge (optional - only used if DISCORD_MC_TOKEN is set)
+  discordToken: process.env.DISCORD_MC_TOKEN || '',
+  discordChannelId: process.env.DISCORD_CHANNEL_ID || '',
+  discordOwnerId: process.env.DISCORD_OWNER_ID || '',
 };
 
 function log(msg) {
@@ -59,6 +63,8 @@ function startBot() {
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
     log(`<${username}> ${message}`);
+    // relay game chat -> Discord bridge channel
+    sendToDiscord(`**<${username}>** ${sanitize(message)}`);
     // AuthMe-style prompt -> send login right away
     if (/\/login|please login|log in/i.test(message)) {
       log('Server asked for login, sending command...');
@@ -182,9 +188,93 @@ function scheduleReconnect() {
   setTimeout(startBot, delay);
 }
 
+/* ---------- Discord bridge (remote control + chat relay) ---------- */
+let discordClient = null;
+let discordChannel = null;
+
+function sanitize(s) {
+  return String(s).replace(/@/g, '@\u200b'); // stop @everyone / @here pings
+}
+function sendToDiscord(text) {
+  if (!discordChannel) return;
+  discordChannel.send(String(text).slice(0, 1900)).catch(() => {});
+}
+
+async function startDiscord() {
+  if (!config.discordToken) {
+    log('Discord bridge disabled (DISCORD_MC_TOKEN not set).');
+    return;
+  }
+  let Discord;
+  try {
+    Discord = require('discord.js');
+  } catch (e) {
+    log('discord.js not installed, Discord bridge disabled.');
+    return;
+  }
+  discordClient = new Discord.Client({
+    intents: [
+      Discord.GatewayIntentBits.Guilds,
+      Discord.GatewayIntentBits.GuildMessages,
+      Discord.GatewayIntentBits.MessageContent,
+    ],
+  });
+
+  discordClient.on('ready', async () => {
+    log(`Discord logged in as ${discordClient.user.tag}`);
+    if (!config.discordChannelId) {
+      log('DISCORD_CHANNEL_ID not set, bridge channel unknown.');
+      return;
+    }
+    try {
+      discordChannel = await discordClient.channels.fetch(config.discordChannelId);
+      log('Discord bridge channel ready.');
+      sendToDiscord('🟢 MC bridge online.');
+    } catch (e) {
+      log('Discord channel fetch failed: ' + e.message);
+    }
+  });
+
+  discordClient.on('messageCreate', async (msg) => {
+    try {
+      if (!msg || !msg.author || msg.author.bot) return;
+      if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
+      if (config.discordOwnerId && msg.author.id !== config.discordOwnerId) return; // owner only
+      const text = (msg.content || '').trim();
+      let mcText = null;
+      if (text.toLowerCase().startsWith('!say ')) {
+        mcText = text.slice(5).trim(); // starts with / => runs as a command
+      } else if (text.toLowerCase().startsWith('!cmd ')) {
+        mcText = '/' + text.slice(5).trim().replace(/^\/+/, '');
+      } else {
+        return;
+      }
+      if (!mcText) return;
+      if (!bot || !bot.entity) {
+        await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
+        return;
+      }
+      bot.chat(mcText);
+      log(`Discord -> MC: ${mcText.slice(0, 80)}`);
+      await msg.react('✅').catch(() => {});
+    } catch (e) {
+      log('Discord message handler error: ' + e.message);
+    }
+  });
+
+  discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
+  try {
+    await discordClient.login(config.discordToken);
+  } catch (e) {
+    log('Discord login failed: ' + e.message);
+    discordClient = null;
+  }
+}
+
 process.on('uncaughtException', (err) => {
   log('UNCAUGHT: ' + err.message);
   scheduleReconnect();
 });
 
+startDiscord();
 startBot();
