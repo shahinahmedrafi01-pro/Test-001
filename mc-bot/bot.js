@@ -110,15 +110,15 @@ function startBot() {
       }
       // never relay anything containing the login command
       if (config.loginCommand && s.includes(config.loginCommand)) return;
-      // Madara mention alert for in-game chat: ping the owner on Discord.
+      // Madara/Rafi mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
       // Shares the 60s cooldown with the Discord-side alert: no mention spam.
-      if (config.discordOwnerId && senderName && s.toLowerCase().includes('madara')) {
+      if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi'))) {
         const now = Date.now();
         if (now - lastMadaraPingAt > 60000) {
           lastMadaraPingAt = now;
           sendToDiscord(`<@${config.discordOwnerId}> 🔔 Someone mentioned you on the server!`);
-          log(`Madara mention alert (MC) from ${senderName}.`);
+          log(`Mention alert (MC) from ${senderName}.`);
         }
       }
       // login prompt fallback
