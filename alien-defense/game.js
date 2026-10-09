@@ -111,7 +111,7 @@ const keys = {};
 const MAX_LIVES = 5;
 
 const ETYPES = {
-  basic:   { hp: 1, speed: 95,  score: 10, r: 16, fire: 0 },
+  basic:   { hp: 1, speed: 82,  score: 10, r: 16, fire: 0 },
   fast:    { hp: 1, speed: 175, score: 20, r: 12, fire: 0 },
   armored: { hp: 3, speed: 62,  score: 30, r: 20, fire: 0.5 },
   elite:   { hp: 2, speed: 115, score: 50, r: 16, fire: 1.1 },
@@ -203,7 +203,7 @@ function startWave(n) {
 function buildWave(n) {
   const q = [];
   const add = (t, c) => { for (let i = 0; i < c; i++) q.push(t); };
-  add("basic", 5 + Math.min(14, n * 2));
+  add("basic", n === 1 ? 4 : 5 + Math.min(12, n * 2));
   if (n >= 2) add("fast", Math.min(10, n));
   if (n >= 3) add("armored", Math.min(8, Math.floor(n / 2)));
   if (n >= 4) add("elite", Math.min(6, Math.floor((n - 1) / 2)));
@@ -213,13 +213,13 @@ function buildWave(n) {
     [q[i], q[j]] = [q[j], q[i]];
   }
   spawnQueue = q;
-  spawnInterval = Math.max(0.32, 1.05 - n * 0.06);
-  spawnT = 0.6;
+  spawnInterval = n === 1 ? 1.35 : Math.max(0.32, 1.05 - n * 0.06);
+  spawnT = 0.8;
 }
 
 function spawnEnemy(type) {
   const c = ETYPES[type];
-  const wob = 1 + (wave - 1) * 0.05;
+  const wob = wave <= 1 ? 0.85 : 1 + (wave - 1) * 0.05;
   enemies.push({
     type, x: rand(30 * SZ, W - 30 * SZ), y: -30,
     hp: c.hp + (type === "armored" && wave >= 8 ? 1 : 0),
@@ -293,7 +293,7 @@ function toMenu() {
 function playerShoot(dt, wantFire) {
   const p = player;
   p.fireT -= dt;
-  const interval = p.rapidT > 0 ? 0.11 : 0.22;
+  const interval = p.rapidT > 0 ? 0.11 : 0.19;
   if (wantFire && p.fireT <= 0) {
     p.fireT = interval;
     const bx = p.x, by = p.y - 24 * SZ;
