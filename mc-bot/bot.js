@@ -228,6 +228,7 @@ function scheduleReconnect() {
 /* ---------- Discord bridge (remote control + chat relay) ---------- */
 let discordClient = null;
 let discordChannel = null;
+let lastMadaraPingAt = 0; // anti-spam cooldown for Madara mention alerts
 
 function sanitize(s) {
   return String(s).replace(/@/g, '@\u200b'); // stop @everyone / @here pings
@@ -310,6 +311,18 @@ async function startDiscord() {
     try {
       if (!msg || !msg.author || msg.author.bot) return;
       if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
+      // Madara mention alert: anyone typing "madara"/"madara_1ea" pings the owner.
+      // Checked before the owner-only gate so other people can call for him too.
+      const contentLower = (msg.content || '').toLowerCase();
+      if (config.discordOwnerId && contentLower.includes('madara')) {
+        const now = Date.now();
+        if (now - lastMadaraPingAt > 60000) { // 60s cooldown against ping spam
+          lastMadaraPingAt = now;
+          await msg.reply(`<@${config.discordOwnerId}> — someone mentioned Madara! 👀`).catch(() => {});
+          log('Madara mention alert sent.');
+        }
+        return; // call-outs are not relayed to the game
+      }
       if (config.discordOwnerId && msg.author.id !== config.discordOwnerId) return; // owner only
       const text = (msg.content || '').trim();
       if (!text) return;
