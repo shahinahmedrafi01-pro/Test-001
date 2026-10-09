@@ -103,6 +103,17 @@ function startBot() {
       }
       // never relay anything containing the login command
       if (config.loginCommand && s.includes(config.loginCommand)) return;
+      // Madara mention alert for in-game chat: ping the owner on Discord.
+      // Requires a known player sender so join/leave/system messages can't false-trigger.
+      // Shares the 60s cooldown with the Discord-side alert: no mention spam.
+      if (config.discordOwnerId && senderName && s.toLowerCase().includes('madara')) {
+        const now = Date.now();
+        if (now - lastMadaraPingAt > 60000) {
+          lastMadaraPingAt = now;
+          sendToDiscord(`<@${config.discordOwnerId}> 🔔 Someone called you in Minecraft!\nPlayer: ${senderName}\nMessage: ${sanitize(s).slice(0, 500)}`);
+          log(`Madara mention alert (MC) from ${senderName}.`);
+        }
+      }
       // login prompt fallback
       if (/\/login|please login|log in/i.test(s)) {
         log('Server asked for login (raw), sending command...');
