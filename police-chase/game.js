@@ -45,11 +45,14 @@ var AudioSys = {
   nearmiss: function () { this.tone(300, 0.12, "sine", 0.06, 900); },
   siren: function () { this.tone(700, 0.35, "triangle", 0.05, 950); this.tone(950, 0.35, "triangle", 0.05, 700); },
   over: function () { this.tone(220, 0.5, "sawtooth", 0.1, 55); },
+  thud: function () { this.noise(0.2, 0.2); this.tone(70, 0.25, "sawtooth", 0.12, 35); },
+  beam: function () { this.tone(1200, 0.5, "sine", 0.04, 300); },
+  boom: function () { this.noise(0.5, 0.2); this.tone(60, 0.4, "sawtooth", 0.1, 30); },
   click: function () { this.tone(520, 0.06, "square", 0.05); }
 };
 
 /* ---------- constants ---------- */
-var LANES = 4;
+var LANES = 5;
 var PPK = 2.4;              // pixels per (km/h) for road scroll speed
 var BEST_KEY = "policeChaseBest";
 
@@ -77,9 +80,9 @@ window.addEventListener("resize", layout);
 /* ---------- DOM ---------- */
 function $(id) { return document.getElementById(id); }
 var el = {};
-["hud", "hud-score", "hud-best", "hud-dist", "hud-speed", "hud-lives",
+["hud", "hud-score", "hud-best", "hud-dist", "hud-speed", "hud-lives", "hud-walls",
  "chase-fill", "chase-wrap", "hud-speed-num", "power-row", "touch-controls",
- "banner", "menu", "howto", "pause", "over", "over-score", "over-best",
+ "banner", "menu", "howto", "pause", "over", "over-title", "over-sub", "over-score", "over-best",
  "over-dist", "btn-pause", "btn-sound", "newbest"
 ].forEach(function (id) { el[id.replace(/-/g, "_")] = $(id); });
 
@@ -94,17 +97,24 @@ var spawnT = 1, pickupT = 9, policeT = 20, lastLane = -1;
 var iframes = 0, shieldT = 0, phaseT = 0, nitroT = 0;
 var surgeT = 0, surgeBuild = 0;
 var chaseMeter = 0, shake = 0, roadOff = 0, sirenT = 0;
+var pursuitT = 0, wallHits = 0, slowT = 0, scrapeCD = 0;
+var ufo = null, ufoT = 20, heli = null, heliT = 14, bombs = [];
+var arresting = false, arrestT = 0, wobX = 0;
 
 try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (e) { best = 0; }
 
 function resetGame() {
-  lane = 1; lives = 3; score = 0; distM = 0;
+  lane = 2; lives = 3; score = 0; distM = 0;
   speedKmh = 70; elapsed = 0;
-  traffic = []; police = []; pickups = []; parts = []; popups = [];
+  traffic = []; police = []; pickups = []; parts = []; popups = []; bombs = [];
   spawnT = 1.2; pickupT = 8; policeT = 20; lastLane = -1;
   iframes = 0; shieldT = 0; phaseT = 0; nitroT = 0;
   surgeT = 0; surgeBuild = 0; chaseMeter = 0; shake = 0; sirenT = 0;
-  px = laneX(1); tilt = 0;
+  pursuitT = 0; wallHits = 0; slowT = 0; scrapeCD = 0;
+  ufo = null; ufoT = rand(18, 28); heli = null; heliT = rand(12, 22);
+  arresting = false; arrestT = 0; wobX = 0;
+  px = laneX(2); tilt = 0;
+  updateWallPips();
 }
 
 /* ---------- entities ---------- */
@@ -128,15 +138,59 @@ function spawnTraffic() {
   traffic.push(t);
 }
 
-function spawnPolice() {
+function spawnPolice(chaseMode) {
   var l = randi(0, LANES - 1);
   var aggro = clamp(0.30 + elapsed * 0.004, 0.30, 1.0);
   police.push({
     lane: l, x: laneX(l), y: H + 70, w: 38, h: 68,
-    // police top speed grows over time; starts a bit slower than the player
-    top: speedKmh * (0.80 + Math.min(0.30, elapsed * 0.0022)),
+    // chase cops run slightly faster than the player; patrol cops start slower
+    top: chaseMode ? speedKmh * 1.06 : speedKmh * (0.80 + Math.min(0.30, elapsed * 0.0022)),
+    mode: chaseMode ? "chase" : "cruise",
     aggro: aggro, flash: Math.random() * 10
   });
+  AudioSys.siren();
+}
+
+/* pursuit: triggered by a crash or a wall scrape; cops chase hard, then fall behind */
+function triggerPursuit() {
+  if (arresting || state !== "playing") return;
+  var was = pursuitT > 0;
+  pursuitT = 10;
+  if (!was) { banner("PURSUIT!", "#ef4444"); AudioSys.siren(); }
+  for (var i = 0; i < police.length; i++) {
+    if (police[i].mode !== "surround") police[i].mode = "chase";
+  }
+  if (police.length < 3) spawnPolice(true);
+}
+
+/* scraping the roadside wall: slows the car, cops catch up; 3 hits = arrested */
+function wallScrape(dir) {
+  if (scrapeCD > 0 || arresting || state !== "playing") return;
+  scrapeCD = 0.9;
+  wallHits++;
+  slowT = 2.2;
+  shake = Math.max(shake, 8);
+  var wx = dir < 0 ? roadX - 10 : roadX + roadW + 10;
+  burst(wx, playerY, "#fbbf24", 16, 200);
+  popup(px, playerY - 60, "WALL HIT!", "#fbbf24");
+  AudioSys.thud();
+  updateWallPips(); updatePowerRow();
+  triggerPursuit();
+  if (wallHits >= 3) startArrest();
+}
+
+function startArrest() {
+  if (arresting || state !== "playing") return;
+  arresting = true; arrestT = 2.0;
+  traffic = []; pickups = []; bombs = []; ufo = null; heli = null; wobX = 0;
+  police = [];
+  function slot(ox, oy) {
+    police.push({ x: px + ox * 2.5, y: playerY + oy * 2.5 + 160, w: 38, h: 68,
+      top: 0, aggro: 0, flash: Math.random() * 10, mode: "surround",
+      tx: px + ox, ty: playerY + oy });
+  }
+  slot(-72, -30); slot(72, -30); slot(0, 96);
+  banner("STOP! POLICE!", "#ef4444");
   AudioSys.siren();
 }
 
@@ -178,7 +232,7 @@ function playerW() { return 36 * carScale; }
 function playerH() { return 66 * carScale; }
 
 function hitPlayer(srcX, srcY) {
-  if (iframes > 0 || phaseT > 0) return;
+  if (iframes > 0 || phaseT > 0 || arresting) return;
   if (shieldT > 0) {
     shieldT = 0;
     burst(srcX, srcY, "#60a5fa", 22, 220);
@@ -193,7 +247,8 @@ function hitPlayer(srcX, srcY) {
   burst(px, playerY, "#ef4444", 16, 200);
   AudioSys.crash();
   updateLives();
-  if (lives <= 0) gameOver();
+  triggerPursuit();
+  if (lives <= 0) gameOver("busted");
 }
 
 function applyPickup(p) {
@@ -207,14 +262,113 @@ function applyPickup(p) {
   updatePowerRow();
 }
 
+/* ---------- special events: UFO + helicopter ---------- */
+function updateFx(dt) {
+  for (var m = parts.length - 1; m >= 0; m--) {
+    var q = parts[m];
+    q.x += q.vx * dt; q.y += q.vy * dt; q.vy += 300 * dt; q.life -= dt;
+    if (q.life <= 0) parts.splice(m, 1);
+  }
+  for (var n = popups.length - 1; n >= 0; n--) {
+    var u = popups[n]; u.y -= 40 * dt; u.life -= dt;
+    if (u.life <= 0) popups.splice(n, 1);
+  }
+}
+
+/* UFO flyby: tries to abduct the car with a tractor beam, always fails */
+function updateUFO(dt) {
+  ufoT -= dt;
+  if (!ufo && ufoT <= 0 && !arresting) {
+    var fromLeft = Math.random() < 0.5;
+    ufo = { x: fromLeft ? -70 : W + 70, y: H * 0.16,
+      vx: (fromLeft ? 1 : -1) * rand(120, 180), mode: "fly", t: 0 };
+    AudioSys.beam();
+    popup(clamp(ufo.x, 40, W - 40), ufo.y + 34, "UFO!", "#e879f9");
+  }
+  if (!ufo) return;
+  var u = ufo;
+  if (u.mode === "fly") {
+    u.x += u.vx * dt;
+    if (Math.abs(u.x - px) < 50) { u.mode = "abduct"; u.t = 2.4; }
+    else if ((u.vx > 0 && u.x > W + 80) || (u.vx < 0 && u.x < -80)) { ufo = null; ufoT = rand(25, 42); }
+  } else if (u.mode === "abduct") {
+    u.t -= dt; u.x += u.vx * dt * 0.25;
+    wobX = Math.sin(elapsed * 28) * 7;
+    if (u.t <= 0) {
+      u.mode = "leave"; u.vx *= 2.4; wobX = 0;
+      popup(px, playerY - 95, "ABDUCTION FAILED!", "#4ade80");
+    }
+  } else {
+    u.x += u.vx * dt;
+    if ((u.vx > 0 && u.x > W + 90) || (u.vx < 0 && u.x < -90)) { ufo = null; ufoT = rand(25, 42); }
+  }
+}
+
+/* helicopter: drops bombs that slow the car but never damage it */
+function updateHeli(dt) {
+  heliT -= dt;
+  if (!heli && heliT <= 0 && !arresting) {
+    var fl = Math.random() < 0.5;
+    heli = { x: fl ? -80 : W + 80, y: H * 0.10,
+      vx: (fl ? 1 : -1) * rand(90, 130), dropT: 0.8, drops: 3, rotor: 0 };
+    popup(clamp(heli.x, 40, W - 40), heli.y + 30, "HELICOPTER!", "#fbbf24");
+  }
+  if (heli) {
+    var h = heli;
+    h.x += h.vx * dt; h.rotor += dt * 20; h.dropT -= dt;
+    if (h.dropT <= 0 && h.drops > 0) {
+      h.drops--; h.dropT = 1.3;
+      bombs.push({ x: h.x + rand(-10, 10), y: h.y + 12, vy: 60, ty: rand(H * 0.30, H * 0.72) });
+    }
+    if (h.drops <= 0 && ((h.vx > 0 && h.x > W + 90) || (h.vx < 0 && h.x < -90))) {
+      heli = null; heliT = rand(20, 36);
+    }
+  }
+  for (var bi = bombs.length - 1; bi >= 0; bi--) {
+    var b = bombs[bi];
+    b.vy += 520 * dt; b.y += b.vy * dt;
+    if (b.y >= b.ty) {
+      bombs.splice(bi, 1);
+      burst(b.x, b.ty, "#f97316", 20, 240);
+      burst(b.x, b.ty, "#78716c", 12, 120);
+      shake = Math.max(shake, 6); AudioSys.boom();
+      if (Math.abs(b.x - px) < 110 && Math.abs(b.ty - playerY) < 140) {
+        slowT = 2.5; updatePowerRow();
+        popup(px, playerY - 70, "SLOWED!", "#fbbf24");
+      }
+    }
+  }
+}
+
 /* ---------- per-frame update ---------- */
 function update(dt) {
   elapsed += dt;
+  if (scrapeCD > 0) scrapeCD -= dt;
+  if (slowT > 0) { slowT -= dt; if (slowT <= 0) updatePowerRow(); }
 
-  // speed: grows over time; nitro adds a kick
+  // arrest sequence: surrounded — the car is stopped while cops close in
+  if (arresting) {
+    arrestT -= dt;
+    speedKmh += (0 - speedKmh) * Math.min(1, dt * 3);
+    var allIn = true;
+    for (var si = 0; si < police.length; si++) {
+      var sc = police[si];
+      sc.x += (sc.tx - sc.x) * Math.min(1, dt * 3.5);
+      sc.y += (sc.ty - sc.y) * Math.min(1, dt * 3.5);
+      sc.flash += dt * 10;
+      if (Math.abs(sc.tx - sc.x) > 10 || Math.abs(sc.ty - sc.y) > 10) allIn = false;
+    }
+    updateFx(dt);
+    if (shake > 0) shake = Math.max(0, shake - dt * 40);
+    if (arrestT <= 0 && allIn) gameOver("arrested");
+    updateHUD();
+    return;
+  }
+
+  // speed: grows over time; nitro adds a kick; walls + bombs slow you down
   var target = Math.min(240, 70 + elapsed * 0.55);
   speedKmh += (target - speedKmh) * Math.min(1, dt * 2);
-  var effSpeed = speedKmh + (nitroT > 0 ? 60 : 0);
+  var effSpeed = (speedKmh + (nitroT > 0 ? 60 : 0)) * (slowT > 0 ? 0.55 : 1);
   var roadV = effSpeed * PPK;             // px/s of road scroll
   roadOff = (roadOff + roadV * dt) % 60;
 
@@ -245,11 +399,21 @@ function update(dt) {
   // pickups
   pickupT -= dt;
   if (pickupT <= 0) { spawnPickup(); pickupT = rand(9, 15); }
-  // police — first wave at ~20s, then more + meaner
+  // police patrols — first wave at ~20s, then more + meaner
   if (elapsed > 20) {
     policeT -= dt;
     var want = Math.min(4, 1 + Math.floor((elapsed - 20) / 40));
-    if (policeT <= 0 && police.length < want) { spawnPolice(); policeT = rand(4, 8); }
+    if (policeT <= 0 && police.length < want) { spawnPolice(false); policeT = rand(4, 8); }
+  }
+  // pursuit: chase hard for a while, then fall behind
+  if (pursuitT > 0) {
+    pursuitT -= dt;
+    if (pursuitT <= 0) {
+      pursuitT = 0;
+      for (var pi = 0; pi < police.length; pi++)
+        if (police[pi].mode === "chase") police[pi].mode = "fallback";
+      popup(px, playerY - 80, "YOU LOST THEM!", "#4ade80");
+    }
   }
 
   // traffic motion + collisions + near miss
@@ -281,6 +445,13 @@ function update(dt) {
   for (var j = police.length - 1; j >= 0; j--) {
     var c = police[j];
     c.flash += dt * 8;
+    if (c.mode === "surround") {
+      c.x += (c.tx - c.x) * Math.min(1, dt * 3.5);
+      c.y += (c.ty - c.y) * Math.min(1, dt * 3.5);
+      continue;
+    }
+    if (c.mode === "chase") c.top += (speedKmh * 1.06 - c.top) * Math.min(1, dt * 2);
+    else if (c.mode === "fallback") c.top += (speedKmh * 0.6 - c.top) * Math.min(1, dt * 2);
     c.y -= (c.top * surgeMul - effSpeed) * PPK * dt;
     // homing toward the player's lane
     var hx = px - c.x;
@@ -316,19 +487,53 @@ function update(dt) {
     }
   }
 
-  // particles + popups
-  for (var m = parts.length - 1; m >= 0; m--) {
-    var q = parts[m];
-    q.x += q.vx * dt; q.y += q.vy * dt; q.vy += 300 * dt; q.life -= dt;
-    if (q.life <= 0) parts.splice(m, 1);
-  }
-  for (var n = popups.length - 1; n >= 0; n--) {
-    var u = popups[n]; u.y -= 40 * dt; u.life -= dt;
-    if (u.life <= 0) popups.splice(n, 1);
-  }
+  updateFx(dt);
+  updateUFO(dt);
+  updateHeli(dt);
 
   sirenT += dt;
   updateHUD();
+}
+
+/* ---------- sky events drawing ---------- */
+function drawUFO(u) {
+  var s = carScale;
+  ctx.save(); ctx.translate(u.x, u.y);
+  ctx.fillStyle = "rgba(232,121,249,0.16)";
+  ctx.beginPath(); ctx.ellipse(0, 6 * s, 44 * s, 10 * s, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#6b7280";
+  ctx.beginPath(); ctx.ellipse(0, 0, 34 * s, 12 * s, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#9ca3af";
+  ctx.beginPath(); ctx.ellipse(0, -6 * s, 16 * s, 10 * s, 0, Math.PI, 0); ctx.fill();
+  for (var i = 0; i < 6; i++) {
+    var a = performance.now() / 300 + i / 6 * Math.PI * 2;
+    ctx.fillStyle = i % 2 ? "#f0abfc" : "#fef9c3";
+    ctx.beginPath(); ctx.arc(Math.cos(a) * 26 * s, 4 * s + Math.sin(a) * 4 * s, 3 * s, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBeam(u) {
+  var s = carScale, topW = 30 * s, botW = 58 * s;
+  var g = ctx.createLinearGradient(0, u.y, 0, playerY);
+  g.addColorStop(0, "rgba(232,121,249,0.45)");
+  g.addColorStop(1, "rgba(232,121,249,0.08)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(u.x - topW / 2, u.y + 8); ctx.lineTo(u.x + topW / 2, u.y + 8);
+  ctx.lineTo(u.x + botW / 2, playerY); ctx.lineTo(u.x - botW / 2, playerY);
+  ctx.closePath(); ctx.fill();
+}
+function drawHeli(h) {
+  var s = carScale;
+  ctx.save(); ctx.translate(h.x, h.y);
+  ctx.strokeStyle = "rgba(210,210,210,0.85)"; ctx.lineWidth = 3 * s;
+  ctx.beginPath(); ctx.moveTo(-34 * s, 0); ctx.lineTo(34 * s, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-24 * s, 0); ctx.lineTo(24 * s, 0); ctx.stroke();
+  ctx.fillStyle = "#374151";
+  ctx.beginPath(); ctx.ellipse(0, 9 * s, 20 * s, 9 * s, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#111827"; ctx.fillRect(-4 * s, 9 * s, 24 * s, 5 * s);
+  ctx.fillStyle = "#6b7280"; ctx.fillRect(-16 * s, 21 * s, 32 * s, 3 * s);
+  ctx.restore();
 }
 
 /* ---------- rendering ---------- */
@@ -347,6 +552,16 @@ function drawRoad() {
   // neon edges
   ctx.fillStyle = "#22d3ee"; ctx.fillRect(roadX - 3, 0, 3, H);
   ctx.fillStyle = "#e879f9"; ctx.fillRect(roadX + roadW, 0, 3, H);
+  // concrete roadside walls (scrolling segments)
+  for (var wy = -40; wy < H + 40; wy += 40) {
+    var wyy = (wy + roadOff) % (H + 80) - 40;
+    ctx.fillStyle = "#3f3f46";
+    ctx.fillRect(roadX - 17, wyy, 13, 40);
+    ctx.fillRect(roadX + roadW + 4, wyy, 13, 40);
+    ctx.fillStyle = "#a1a1aa";
+    ctx.fillRect(roadX - 17, wyy, 13, 9);
+    ctx.fillRect(roadX + roadW + 4, wyy, 13, 9);
+  }
   // lane dividers
   ctx.fillStyle = "rgba(255,255,255,0.55)";
   for (var l = 1; l < LANES; l++) {
@@ -460,6 +675,8 @@ function render() {
     var c = police[i];
     drawCar(c.x, c.y, c.w, c.h, "#111827", { police: true, flash: c.flash });
   }
+  if (ufo) drawUFO(ufo);
+  if (heli) drawHeli(heli);
   // nitro flames
   if (nitroT > 0 && state === "playing") {
     for (var f = 0; f < 3; f++)
@@ -468,7 +685,15 @@ function render() {
   }
   // player (blink while iframes)
   var blink = iframes > 0 && Math.floor(performance.now() / 120) % 2 === 0;
-  if (!blink) drawCar(px, playerY, 36, 66, "#ef2d2d", { stripe: "#f8fafc", tilt: tilt, ghost: phaseT > 0, shield: shieldT > 0 });
+  if (!blink) drawCar(px + wobX, playerY, 36, 66, "#ef2d2d", { stripe: "#f8fafc", tilt: tilt, ghost: phaseT > 0, shield: shieldT > 0 });
+  if (ufo && ufo.mode === "abduct") drawBeam(ufo);
+  for (i = 0; i < bombs.length; i++) {
+    var bb = bombs[i];
+    ctx.fillStyle = "#1f2937";
+    ctx.beginPath(); ctx.arc(bb.x, bb.y, 6 * carScale, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ef4444";
+    ctx.fillRect(bb.x - 1, bb.y - 9 * carScale, 2, 4);
+  }
   // particles
   for (i = 0; i < parts.length; i++) {
     var q = parts[i];
@@ -502,6 +727,10 @@ function updateLives() {
   for (var i = 0; i < 3; i++) s += i < lives ? "❤" : "🖤";
   el.hud_lives.innerHTML = s;
 }
+function updateWallPips() {
+  el.hud_walls.textContent = "WALL " + wallHits + "/3";
+  el.hud_walls.style.color = wallHits >= 2 ? "#ef4444" : "#fbbf24";
+}
 function updatePowerRow() {
   var h = "";
   function chip(label, t, color) {
@@ -510,6 +739,7 @@ function updatePowerRow() {
   chip("NITRO", nitroT, "#fb923c");
   chip("SHIELD", shieldT, "#60a5fa");
   chip("PHASE", phaseT, "#22d3ee");
+  chip("SLOWED", slowT, "#f87171");
   el.power_row.innerHTML = h;
 }
 function updateHUD() {
@@ -549,10 +779,21 @@ function resumeGame() {
   state = "playing"; showOverlay(null);
   lastT = performance.now();
 }
-function gameOver() {
+function gameOver(kind) {
+  kind = kind || "busted";
   state = "gameover";
+  arresting = false; wobX = 0;
   AudioSys.over();
-  burst(px, playerY, "#ef4444", 40, 320);
+  if (kind === "busted") burst(px, playerY, "#ef4444", 40, 320);
+  else AudioSys.siren();
+  if (kind === "arrested") {
+    el.over_title.innerHTML = "&#128657; YOU ARE<br>ARRESTED! &#128657;";
+    el.over_sub.textContent = "Too many wall hits - the chase is over.";
+  } else {
+    el.over_title.textContent = "BUSTED!";
+    el.over_sub.textContent = "The cops finally caught you.";
+  }
+  el.over.classList.toggle("arrested", kind === "arrested");
   var isBest = score > best;
   if (isBest) { best = Math.floor(score); try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {} }
   el.over_score.textContent = fmt(score);
@@ -564,8 +805,14 @@ function gameOver() {
 function toMenu() { state = "menu"; AudioSys.click(); showOverlay("menu"); }
 
 /* ---------- input ---------- */
-function moveLeft() { if (state === "playing" && lane > 0) { lane--; AudioSys.ensure(); } }
-function moveRight() { if (state === "playing" && lane < LANES - 1) { lane++; AudioSys.ensure(); } }
+function moveLeft() {
+  if (state !== "playing" || arresting) return;
+  if (lane > 0) { lane--; AudioSys.ensure(); } else wallScrape(-1);
+}
+function moveRight() {
+  if (state !== "playing" || arresting) return;
+  if (lane < LANES - 1) { lane++; AudioSys.ensure(); } else wallScrape(1);
+}
 
 document.addEventListener("keydown", function (e) {
   var k = e.key;
@@ -636,7 +883,7 @@ function frame(now) {
 
 /* ---------- boot ---------- */
 layout();
-px = laneX(1);
+px = laneX(2);
 el.hud_best.textContent = fmt(best);
 updateLives(); updatePowerRow();
 showOverlay("menu");
@@ -652,6 +899,14 @@ window.__t = {
   get dist() { return distM; },
   get speed() { return speedKmh; },
   get chase() { return chaseMeter; },
+  get wallHits() { return wallHits; },
+  get pursuitT() { return pursuitT; },
+  get slowT() { return slowT; },
+  get arresting() { return arresting; },
+  get lanes() { return LANES; },
+  get hasUfo() { return !!ufo; },
+  get hasHeli() { return !!heli; },
+  get bombsN() { return bombs.length; },
   get trafficN() { return traffic.length; },
   get policeN() { return police.length; },
   get nitroT() { return nitroT; },
@@ -681,14 +936,24 @@ window.__t = {
     pickups.push(p); return p;
   },
   hit: hitPlayer,
+  wallScrape: wallScrape,
+  triggerPursuit: triggerPursuit,
+  startArrest: startArrest,
+  forceBombAt: function (x, ty) {
+    var b = { x: x, y: H * 0.1, vy: 60, ty: ty };
+    bombs.push(b); return b;
+  },
   clearEntities: function () { traffic = []; police = []; pickups = []; },
   set: function (k, v) {
-    ({ lives: 1, score: 1, elapsed: 1, iframes: 1, shieldT: 1, phaseT: 1, nitroT: 1, chaseMeter: 1, policeT: 1, spawnT: 1, pickupT: 1 })[k];
     if (k === "lives") lives = v; else if (k === "score") score = v;
     else if (k === "elapsed") elapsed = v; else if (k === "iframes") iframes = v;
     else if (k === "shieldT") shieldT = v; else if (k === "phaseT") phaseT = v;
     else if (k === "nitroT") nitroT = v; else if (k === "chaseMeter") chaseMeter = v;
     else if (k === "policeT") policeT = v; else if (k === "spawnT") spawnT = v;
-    else if (k === "pickupT") pickupT = v;
+    else if (k === "pickupT") pickupT = v; else if (k === "scrapeCD") scrapeCD = v;
+    else if (k === "slowT") slowT = v;
+    else if (k === "wallHits") { wallHits = v; updateWallPips(); }
+    else if (k === "pursuitT") pursuitT = v; else if (k === "ufoT") ufoT = v;
+    else if (k === "heliT") heliT = v;
   }
 };

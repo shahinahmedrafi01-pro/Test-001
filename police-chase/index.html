@@ -27,6 +27,7 @@
     </div>
     <div class="hud-col right">
       <div id="hud-lives" aria-label="Lives"></div>
+      <div id="hud-walls">WALL 0/3</div>
       <button id="btn-pause" aria-label="Pause">❚❚</button>
     </div>
   </div>
@@ -59,11 +60,13 @@
       <div><b>P</b> — pause · <b>M</b> — sound</div>
       <div>🚔 Cops chase from behind — don't let them ram you</div>
       <div>💥 3 hits and you're busted</div>
+      <div>🧱 Don't scrape the roadside walls — 3 hits and you're <b>ARRESTED</b></div>
       <div><b>N</b> Nitro — speed + double score</div>
       <div><b>S</b> Shield — blocks one crash</div>
       <div><b>P</b> Phase — drive through traffic</div>
       <div><b>+</b> Repair — restores 1 life</div>
       <div>Near misses earn bonus points!</div>
+      <div>🛸 UFOs may try (and fail) to abduct you · 🚁 choppers drop slowing bombs</div>
     </div>
     <div class="menu-btns">
       <button id="btn-howto-back" class="big">‹ BACK</button>
@@ -80,8 +83,8 @@
   </div>
 
   <div id="over" class="overlay hidden">
-    <h1 class="title">BUSTED!</h1>
-    <p class="subtitle">The cops finally caught you.</p>
+    <h1 class="title" id="over-title">BUSTED!</h1>
+    <p class="subtitle" id="over-sub">The cops finally caught you.</p>
     <div id="newbest" class="hidden">★ NEW BEST! ★</div>
     <div class="final-score">SCORE<b id="over-score">0</b></div>
     <div class="stat-line">DISTANCE <b id="over-dist">0 m</b> · BEST <b id="over-best">0</b></div>
