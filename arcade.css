@@ -1,0 +1,91 @@
+/* Rafi's Mini Arcade — hub styles */
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { min-height: 100%; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #050510;
+  color: #e8e8f2;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* animated starfield */
+.starfield {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(1.5px 1.5px at 12% 22%, #fff 100%, transparent 100%),
+    radial-gradient(1px 1px at 68% 8%, #fff 100%, transparent 100%),
+    radial-gradient(2px 2px at 84% 64%, #cfe8ff 100%, transparent 100%),
+    radial-gradient(1px 1px at 34% 78%, #fff 100%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 52% 42%, #cfe8ff 100%, transparent 100%),
+    radial-gradient(1px 1px at 8% 66%, #fff 100%, transparent 100%),
+    radial-gradient(2px 2px at 92% 30%, #fff 100%, transparent 100%),
+    radial-gradient(1px 1px at 44% 12%, #cfe8ff 100%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 74% 88%, #fff 100%, transparent 100%),
+    radial-gradient(1px 1px at 22% 48%, #fff 100%, transparent 100%),
+    radial-gradient(1200px 600px at 50% -10%, #1b1040 0%, transparent 60%),
+    radial-gradient(900px 500px at 90% 110%, #0b2a4a 0%, transparent 55%),
+    #050510;
+  animation: drift 90s linear infinite;
+}
+@keyframes drift {
+  from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0; }
+  to   { background-position: 0 400px, 0 300px, 0 500px, 0 350px, 0 450px, 0 320px, 0 480px, 0 380px, 0 420px, 0 360px, 0 0, 0 0, 0 0; }
+}
+
+.site-header { text-align: center; padding: 44px 16px 10px; }
+.site-header h1 {
+  font-size: clamp(1.7rem, 6vw, 3rem);
+  letter-spacing: 4px; font-weight: 800; color: #fff;
+  text-shadow: 0 0 18px rgba(34, 211, 238, .55);
+}
+.site-header h1 .neon {
+  background: linear-gradient(90deg, #22d3ee, #a78bfa, #fb7185);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.tagline { margin-top: 8px; color: #9aa3c0; letter-spacing: 2px; font-size: .85rem; }
+
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 340px));
+  gap: 26px; justify-content: center;
+  padding: 34px 18px 20px; max-width: 900px; margin: 0 auto;
+}
+.card {
+  background: linear-gradient(160deg, rgba(24, 18, 52, .92), rgba(10, 12, 34, .94));
+  border: 1px solid rgba(120, 120, 200, .22);
+  border-radius: 18px; overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .55);
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  display: flex; flex-direction: column;
+}
+.card:hover {
+  transform: translateY(-6px);
+  border-color: rgba(34, 211, 238, .55);
+  box-shadow: 0 18px 54px rgba(34, 211, 238, .18);
+}
+.card.featured { border-color: rgba(167, 139, 250, .45); }
+.thumb svg { display: block; width: 100%; height: auto; }
+.card h2 {
+  padding: 16px 18px 4px; font-size: 1.35rem; letter-spacing: 1px; color: #fff;
+}
+.card .desc { padding: 0 18px; color: #9aa3c0; font-size: .92rem; min-height: 2.6em; }
+.card .best {
+  padding: 10px 18px 0; font-size: .8rem; letter-spacing: 2px; color: #7dd3fc;
+}
+.card .best span { color: #fff; font-weight: 700; }
+.play-btn {
+  margin: 14px 18px 20px; text-align: center; text-decoration: none;
+  padding: 13px 0; border-radius: 12px; font-weight: 800; letter-spacing: 3px;
+  color: #04121a; background: linear-gradient(90deg, #22d3ee, #34d399);
+  box-shadow: 0 6px 22px rgba(34, 211, 238, .35);
+  transition: filter .15s ease, transform .1s ease;
+}
+.play-btn:hover { filter: brightness(1.1); }
+.play-btn:active { transform: scale(.97); }
+
+footer { text-align: center; padding: 26px 16px 40px; color: #5b6285; font-size: .8rem; }
+
+@media (max-width: 420px) {
+  .site-header { padding-top: 32px; }
+  .cards { grid-template-columns: 1fr; padding: 24px 14px 10px; }
+}

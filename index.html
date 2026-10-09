@@ -2,314 +2,106 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Dino Run — Test 001</title>
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { width:100%; height:100%; overflow:hidden; background:#f7f7f7;
-    font-family:'Courier New',monospace; user-select:none; -webkit-user-select:none; touch-action:none; }
-  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
-  #game { display:block; image-rendering:pixelated; image-rendering:crisp-edges;
-    max-width:100vw; max-height:100vh; }
-  #hint { position:fixed; bottom:12px; left:0; right:0; text-align:center;
-    color:#888; font-size:12px; pointer-events:none; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rafi's Mini Arcade</title>
+<link rel="stylesheet" href="arcade.css">
 </head>
 <body>
-<div id="wrap"><canvas id="game"></canvas></div>
-<div id="hint">SPACE / TAP = jump &nbsp;·&nbsp; ↓ / SWIPE DOWN = duck</div>
-<script>
-"use strict";
-/* ============================================================
-   DINO RUN — endless runner like the Chrome offline dino game.
-   Works online. Jump over cacti, duck under birds. Hi-score saved.
-   ============================================================ */
-const cv=document.getElementById("game"),ctx=cv.getContext("2d");
-ctx.imageSmoothingEnabled=false;
-let W=0,H=0,DPR=1;
-function resize(){
-  DPR=Math.min(2,window.devicePixelRatio||1);
-  W=Math.min(window.innerWidth,1100);
-  H=Math.min(window.innerHeight,420);
-  // keep 16:9-ish play area, at least 320px tall
-  if(window.innerWidth<700){W=window.innerWidth;H=Math.min(window.innerHeight,360);}
-  cv.width=W*DPR;cv.height=H*DPR;
-  cv.style.width=W+"px";cv.style.height=H+"px";
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  groundY=H-60;
-}
-window.addEventListener("resize",resize);
+<div class="starfield" aria-hidden="true"></div>
+<header class="site-header">
+  <h1>RAFI'S <span class="neon">MINI&nbsp;ARCADE</span></h1>
+  <p class="tagline">Pick a game. Beat your best.</p>
+</header>
 
-// ---------- audio ----------
-let AC=null;
-function audio(){if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}}
-  if(AC&&AC.state==="suspended")AC.resume();return AC;}
-function tone(f,d,type,v,slide){const ac=audio();if(!ac)return;
-  const o=ac.createOscillator(),g=ac.createGain();
-  o.type=type||"square";o.frequency.setValueAtTime(f,ac.currentTime);
-  if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(30,slide),ac.currentTime+d);
-  g.gain.setValueAtTime(v||0.08,ac.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+d);
-  o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+d);}
-const sfx={
-  jump(){tone(280,0.15,"square",0.07,620);},
-  point(){tone(880,0.09,"sine",0.09);setTimeout(()=>tone(1174,0.12,"sine",0.09),90);},
-  die(){tone(220,0.3,"sawtooth",0.12,60);},
-  start(){tone(520,0.1,"square",0.08,780);}
-};
+<main class="cards">
+  <article class="card">
+    <div class="thumb">
+      <svg viewBox="0 0 300 150" role="img" aria-label="Dino Run thumbnail">
+        <rect width="300" height="150" fill="#87ceeb"/>
+        <rect y="118" width="300" height="32" fill="#f7f7f7"/>
+        <rect y="118" width="300" height="3" fill="#535353"/>
+        <g fill="#535353">
+          <rect x="52" y="70" width="24" height="26"/>
+          <rect x="72" y="60" width="12" height="14"/>
+          <rect x="80" y="64" width="10" height="8"/>
+          <rect x="54" y="96" width="7" height="10"/>
+          <rect x="67" y="96" width="7" height="10"/>
+          <rect x="46" y="74" width="8" height="8"/>
+        </g>
+        <rect x="74" y="62" width="4" height="4" fill="#fff"/>
+        <g fill="#2e7d32">
+          <rect x="200" y="78" width="10" height="40"/>
+          <rect x="192" y="88" width="10" height="6"/>
+          <rect x="192" y="88" width="6" height="16"/>
+          <rect x="208" y="96" width="10" height="6"/>
+          <rect x="212" y="96" width="6" height="14"/>
+          <rect x="248" y="84" width="8" height="34"/>
+          <rect x="242" y="92" width="8" height="5"/>
+          <rect x="242" y="92" width="5" height="12"/>
+        </g>
+        <g fill="#fff" opacity="0.9">
+          <rect x="150" y="24" width="44" height="12"/>
+          <rect x="158" y="16" width="28" height="10"/>
+        </g>
+      </svg>
+    </div>
+    <h2>Dino Run</h2>
+    <p class="desc">Jump the cacti, duck under the birds. A classic endless runner.</p>
+    <p class="best">BEST <span id="best-dino">0</span></p>
+    <a class="play-btn" href="dino-run/">PLAY</a>
+  </article>
 
-// ---------- helpers ----------
-const clamp=(v,a,b)=>v<a?a:v>b?b:v;
-const rand=(a,b)=>a+Math.random()*(b-a);
-let groundY=0;
+  <article class="card featured">
+    <div class="thumb">
+      <svg viewBox="0 0 300 150" role="img" aria-label="Alien Defense thumbnail">
+        <rect width="300" height="150" fill="#050510"/>
+        <g fill="#fff">
+          <circle cx="30" cy="20" r="1.6"/><circle cx="80" cy="45" r="1.2"/>
+          <circle cx="140" cy="15" r="1.8"/><circle cx="200" cy="35" r="1.2"/>
+          <circle cx="260" cy="18" r="1.6"/><circle cx="110" cy="70" r="1.1"/>
+          <circle cx="230" cy="80" r="1.3"/><circle cx="55" cy="95" r="1.1"/>
+          <circle cx="175" cy="100" r="1.4"/><circle cx="285" cy="110" r="1.2"/>
+        </g>
+        <circle cx="255" cy="40" r="16" fill="#3b2d6e"/>
+        <circle cx="250" cy="36" r="16" fill="#050510" opacity="0.55"/>
+        <g>
+          <ellipse cx="70" cy="42" rx="22" ry="8" fill="#4ade80"/>
+          <ellipse cx="70" cy="38" rx="10" ry="7" fill="#22c55e"/>
+          <circle cx="64" cy="38" r="2.4" fill="#fff"/>
+          <circle cx="76" cy="38" r="2.4" fill="#fff"/>
+          <circle cx="64" cy="38" r="1.1" fill="#111"/>
+          <circle cx="76" cy="38" r="1.1" fill="#111"/>
+        </g>
+        <g>
+          <ellipse cx="150" cy="30" rx="18" ry="7" fill="#f87171"/>
+          <ellipse cx="150" cy="26" rx="8" ry="6" fill="#ef4444"/>
+          <circle cx="145" cy="26" r="2.2" fill="#fff"/>
+          <circle cx="155" cy="26" r="2.2" fill="#fff"/>
+        </g>
+        <g>
+          <path d="M150 128 L162 96 L150 88 L138 96 Z" fill="#22d3ee"/>
+          <path d="M150 88 L156 100 L150 106 L144 100 Z" fill="#0e7490"/>
+          <path d="M138 96 L130 112 L138 108 Z" fill="#0891b2"/>
+          <path d="M162 96 L170 112 L162 108 Z" fill="#0891b2"/>
+          <circle cx="150" cy="100" r="4" fill="#e0f2fe"/>
+          <path d="M146 128 L150 140 L154 128 Z" fill="#fb923c"/>
+        </g>
+        <g stroke="#22d3ee" stroke-width="2" opacity="0.9">
+          <line x1="150" y1="80" x2="150" y2="60"/>
+          <line x1="142" y1="80" x2="138" y2="62"/>
+        </g>
+      </svg>
+    </div>
+    <h2>Alien Defense</h2>
+    <p class="desc">Defend the galaxy. Destroy the alien invasion!</p>
+    <p class="best">BEST <span id="best-alien">0</span></p>
+    <a class="play-btn" href="alien-defense/">PLAY</a>
+  </article>
+</main>
 
-// ---------- pixel sprites (drawn with rects) ----------
-function drawDino(g,x,y,run,duck,dead){
-  // x,y = top-left of sprite box; dino ~ 44x48 standing, 56x28 ducking
-  g.fillStyle=dead?"#c0392b":"#535353";
-  const P=(px,py,w,h)=>g.fillRect(x+px,y+py,w,h);
-  if(duck){
-    // long low body
-    P(0,10,56,14);P(40,2,14,12);P(48,6,10,8);          // body+head+snout
-    P(42,4,3,3);g.fillStyle="#fff";P(42,4,3,3);g.fillStyle=dead?"#c0392b":"#535353"; // eye white
-    P(43,5,2,2);g.fillStyle="#222";P(43,5,2,2);g.fillStyle=dead?"#c0392b":"#535353"; // pupil
-    P(4,24,8,4);P(24,24,8,4);                            // legs
-    if(run){P(2,28,10,3);}else{P(24,28,10,3);}
-    P(0,14,6,6);                                          // tail
-  }else{
-    P(8,14,24,26);P(28,4,12,14);P(36,8,10,8);            // body, head, snout
-    g.fillStyle="#fff";P(30,6,4,4);g.fillStyle=dead?"#c0392b":"#535353";
-    g.fillStyle="#222";P(31,7,2,2);g.fillStyle=dead?"#c0392b":"#535353";
-    P(8,18,4,8);                                          // tail
-    P(10,40,7,8);P(23,40,7,8);                            // legs
-    if(run){P(8,44,9,4);}                                 // run frame B shifts legs
-    P(24,20,6,10);                                        // arm
-  }
-}
-function drawCactus(g,x,y,w,h){
-  g.fillStyle="#2e7d32";
-  g.fillRect(x+w*0.35,y,Math.max(4,w*0.3),h);
-  g.fillRect(x,y+h*0.25,Math.max(4,w*0.28),h*0.14);
-  g.fillRect(x,y+h*0.25,Math.max(4,w*0.28),h*0.5);
-  g.fillRect(x+w*0.72,y+h*0.4,Math.max(4,w*0.28),h*0.14);
-  g.fillRect(x+w*0.72,y+h*0.4,Math.max(4,w*0.28),h*0.45);
-  g.fillStyle="#388e3c";
-  g.fillRect(x+w*0.35,y,2,h);
-}
-function drawBird(g,x,y,flap){
-  g.fillStyle="#535353";
-  const w=flap?10:2;
-  g.fillRect(x,y+8,34,8);            // body
-  g.fillRect(x+30,y+4,10,8);         // head
-  g.fillRect(x,y,14,w+6);            // wing up/down
-  g.fillStyle="#222";g.fillRect(x+33,y+6,3,3);
-}
-function drawCloud(g,x,y,s){
-  g.fillStyle="rgba(255,255,255,.9)";
-  g.fillRect(x,y,44*s,14*s);g.fillRect(x+8*s,y-8*s,28*s,10*s);
-  g.fillStyle="rgba(200,200,200,.5)";g.fillRect(x,y+12*s,44*s,3*s);
-}
-
-// ---------- game state ----------
-const G={
-  state:"ready", // ready | play | dead
-  speed:0, baseSpeed:380,
-  dist:0, score:0, hi:+(localStorage.getItem("dinoHi")||0),
-  time:0, nextMilestone:100,
-  dino:{x:60,y:0,vy:0,duck:false,onGround:true},
-  obstacles:[], clouds:[], particles:[],
-  spawnT:0, birdUnlock:400,
-};
-const GRAV=2600, JUMP_V=880;
-
-function reset(){
-  G.state="play";G.speed=G.baseSpeed;G.dist=0;G.score=0;
-  G.time=0;G.nextMilestone=100;G.obstacles=[];G.particles=[];
-  G.dino.y=0;G.dino.vy=0;G.dino.duck=false;G.dino.onGround=true;
-  G.spawnT=1.2;
-  for(let i=0;i<5;i++)G.clouds.push({x:rand(0,W),y:rand(10,H*0.4),s:rand(0.7,1.4),v:rand(12,30)});
-  sfx.start();
-}
-function dinoH(){return G.dino.duck?28:48;}
-function dinoW(){return G.dino.duck?56:44;}
-function dinoBox(){
-  const d=G.dino;
-  return {x:d.x+6,y:groundY-d.y-dinoH()+6,w:dinoW()-12,h:dinoH()-8};
-}
-function spawnObstacle(){
-  const r=Math.random(),x=W+40;
-  const diff=Math.min(1,G.score/1500);
-  if(G.score>G.birdUnlock&&r<0.28*diff+0.12){
-    // bird at low / mid / high
-    const lvls=[0,34,64];
-    const h=lvls[Math.floor(Math.random()*lvls.length)];
-    G.obstacles.push({type:"bird",x,y:groundY-40-h,w:44,h:22,flap:0});
-  }else{
-    const big=Math.random()<0.35+diff*0.3;
-    const w=big?rand(26,40):rand(16,24),h=big?rand(52,72):rand(34,50);
-    const n=Math.random()<0.3?2:1;
-    for(let i=0;i<n;i++)
-      G.obstacles.push({type:"cactus",x:x+i*(w+8),w,h,y:groundY-h});
-  }
-}
-function collide(a,b){
-  return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
-}
-
-// ---------- input ----------
-function doJump(){
-  audio();
-  if(G.state==="ready"){reset();return;}
-  if(G.state==="dead"){reset();return;}
-  const d=G.dino;
-  if(d.onGround){d.vy=JUMP_V;d.onGround=false;d.duck=false;sfx.jump();}
-}
-function doDuck(down){
-  if(G.state!=="play")return;
-  const d=G.dino;
-  d.duck=down;
-  if(down&&!d.onGround)d.vy=Math.max(d.vy,1400); // slam down
-}
-window.addEventListener("keydown",e=>{
-  if(e.repeat)return;
-  const k=e.key.toLowerCase();
-  if(k===" "||k==="arrowup"||k==="w"){doJump();e.preventDefault();}
-  if(k==="arrowdown"||k==="s")doDuck(true);
-});
-window.addEventListener("keyup",e=>{
-  const k=e.key.toLowerCase();
-  if(k==="arrowdown"||k==="s")doDuck(false);
-});
-// touch: tap = jump, swipe down = duck
-let tY=null,tDucking=false;
-cv.addEventListener("pointerdown",e=>{audio();tY=e.clientY;tDucking=false;});
-cv.addEventListener("pointermove",e=>{
-  if(tY===null)return;
-  if(e.clientY-tY>36&&!tDucking){tDucking=true;doDuck(true);}
-});
-cv.addEventListener("pointerup",e=>{
-  if(tDucking)doDuck(false);
-  else doJump();
-  tY=null;
-});
-cv.addEventListener("pointercancel",()=>{if(tDucking)doDuck(false);tY=null;});
-</script>
-<script>
-"use strict";
-/* ---------- update ---------- */
-function update(dt){
-  if(G.state!=="play")return;
-  G.time+=dt;
-  G.speed=G.baseSpeed+Math.min(420,G.dist*0.012);
-  G.dist+=G.speed*dt;
-  const ns=Math.floor(G.dist/10);
-  if(ns!==G.score){G.score=ns;
-    if(ns>=G.nextMilestone){G.nextMilestone+=100;sfx.point();}}
-  // dino physics
-  const d=G.dino;
-  if(!d.onGround){
-    d.vy-=GRAV*dt;
-    d.y+=d.vy*dt;
-    if(d.y<=0){d.y=0;d.vy=0;d.onGround=true;}
-  }
-  // obstacles
-  G.spawnT-=dt;
-  if(G.spawnT<=0){spawnObstacle();
-    G.spawnT=rand(0.55,1.5)*clamp(620/G.speed,0.55,1.2);}
-  const box=dinoBox();
-  for(let i=G.obstacles.length-1;i>=0;i--){
-    const o=G.obstacles[i];
-    o.x-=G.speed*dt;
-    if(o.type==="bird")o.flap+=dt*10;
-    const ob={x:o.x+4,y:o.type==="bird"?o.y+4:o.y+4,w:o.w-8,h:o.h-6};
-    if(collide(box,ob)){die();return;}
-    if(o.x+o.w<-60)G.obstacles.splice(i,1);
-  }
-  // clouds
-  G.clouds.forEach(c=>{c.x-=c.v*dt;if(c.x<-90){c.x=W+rand(0,200);c.y=rand(10,H*0.4);}});
-  // dust particles when running
-  if(d.onGround&&Math.random()<dt*8)
-    G.particles.push({x:d.x+6,y:groundY-2,vx:-rand(60,140),vy:-rand(20,70),life:0.5});
-  for(let i=G.particles.length-1;i>=0;i--){
-    const p=G.particles[i];p.life-=dt;
-    p.x+=p.vx*dt;p.y+=p.vy*dt;
-    if(p.life<=0)G.particles.splice(i,1);
-  }
-}
-function die(){
-  G.state="dead";sfx.die();
-  if(G.score>G.hi){G.hi=G.score;localStorage.setItem("dinoHi",G.hi);}
-}
-
-/* ---------- render ---------- */
-function draw(){
-  // sky
-  const g=ctx.createLinearGradient(0,0,0,H);
-  g.addColorStop(0,"#87ceeb");g.addColorStop(1,"#e8f6ff");
-  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
-  // distant hills (parallax)
-  ctx.fillStyle="#cfe8d8";
-  const off=(G.dist*0.15)%240;
-  for(let x=-240;x<W+240;x+=240){
-    ctx.beginPath();
-    ctx.moveTo(x-off+120,H);ctx.lineTo(x-off+180,groundY-70);
-    ctx.lineTo(x-off+240,H);ctx.closePath();ctx.fill();
-  }
-  // clouds
-  G.clouds.forEach(c=>drawCloud(ctx,c.x,c.y,c.s));
-  // ground
-  ctx.fillStyle="#f7f7f7";ctx.fillRect(0,groundY,W,H-groundY);
-  ctx.fillStyle="#535353";
-  const goff=G.dist%24;
-  for(let x=-24;x<W+24;x+=24)ctx.fillRect(x-goff,groundY+14,12,3);
-  ctx.fillRect(0,groundY,W,3);
-  // dust
-  ctx.fillStyle="rgba(150,150,150,.6)";
-  G.particles.forEach(p=>ctx.fillRect(p.x,p.y,4,4));
-  // obstacles
-  G.obstacles.forEach(o=>{
-    if(o.type==="bird")drawBird(ctx,o.x,o.y,Math.sin(o.flap)>0);
-    else drawCactus(ctx,o.x,o.y,o.w,o.h);
-  });
-  // dino
-  const d=G.dino,run=Math.floor(G.time*10)%2===0;
-  drawDino(ctx,d.x,groundY-d.y-dinoH(),run,d.duck,G.state==="dead");
-  // score
-  ctx.fillStyle="#535353";ctx.font="bold 20px 'Courier New',monospace";
-  ctx.textAlign="right";
-  const hiStr=String(G.hi).padStart(5,"0"),sStr=String(G.score).padStart(5,"0");
-  ctx.fillText(`HI ${hiStr}  ${sStr}`,W-16,30);
-  // overlays
-  ctx.textAlign="center";
-  if(G.state==="ready"){
-    ctx.fillStyle="rgba(0,0,0,.45)";ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="#fff";ctx.font="bold 34px 'Courier New',monospace";
-    ctx.fillText("🦕 DINO RUN",W/2,H/2-40);
-    ctx.font="16px 'Courier New',monospace";
-    ctx.fillText("Press SPACE or TAP to start",W/2,H/2);
-    ctx.fillText("Jump the cacti · Duck under birds",W/2,H/2+30);
-  }else if(G.state==="dead"){
-    ctx.fillStyle="rgba(0,0,0,.45)";ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="#fff";ctx.font="bold 34px 'Courier New',monospace";
-    ctx.fillText("💀 GAME OVER",W/2,H/2-40);
-    ctx.font="18px 'Courier New',monospace";
-    ctx.fillText(`Score: ${G.score}   Best: ${G.hi}`,W/2,H/2);
-    ctx.font="15px 'Courier New',monospace";
-    const blink=Math.floor(performance.now()/500)%2===0;
-    if(blink)ctx.fillText("Press SPACE or TAP to retry",W/2,H/2+36);
-  }
-}
-
-/* ---------- main loop ---------- */
-let last=performance.now();
-function frame(now){
-  let dt=(now-last)/1000;last=now;
-  if(dt>0.05)dt=0.05;
-  update(dt);draw();
-  requestAnimationFrame(frame);
-}
-resize();
-requestAnimationFrame(frame);
-</script>
+<footer>
+  <p>Scores are saved on this device · More games coming soon</p>
+</footer>
+<script src="arcade.js"></script>
 </body>
 </html>

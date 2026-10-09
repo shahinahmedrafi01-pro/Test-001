@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Alien Defense — Rafi's Mini Arcade</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-wrap">
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="hud-col">
+      <div class="hud-row"><span class="label">SCORE</span><span id="hud-score" class="val">0</span></div>
+      <div class="hud-row"><span class="label">BEST</span><span id="hud-best" class="val">0</span></div>
+    </div>
+    <div class="hud-col center">
+      <div id="hud-wave">WAVE 1</div>
+      <div id="boss-bar" class="hidden"><span class="boss-tag">BOSS</span><div class="boss-track"><div id="boss-fill"></div></div></div>
+    </div>
+    <div class="hud-col right">
+      <div id="hud-lives" aria-label="Lives"></div>
+      <button id="btn-pause" aria-label="Pause">&#10074;&#10074;</button>
+    </div>
+  </div>
+
+  <div id="power-bar" class="hidden"></div>
+
+  <div id="touch-controls">
+    <div class="tc-move">
+      <button id="btn-left" aria-label="Move left">&#9664;</button>
+      <button id="btn-right" aria-label="Move right">&#9654;</button>
+    </div>
+    <button id="btn-fire" aria-label="Fire">FIRE</button>
+  </div>
+
+  <div id="banner" class="hidden"></div>
+
+  <div id="menu" class="overlay">
+    <h1 class="title">ALIEN<span>DEFENSE</span></h1>
+    <p class="subtitle">Defend the galaxy. Destroy the alien invasion!</p>
+    <p class="menu-best">BEST SCORE&nbsp; <span id="menu-best">0</span></p>
+    <div class="menu-buttons">
+      <button id="btn-play" class="big-btn">PLAY GAME</button>
+      <button id="btn-howto" class="btn">HOW TO PLAY</button>
+      <button id="btn-sound" class="btn">SOUND: OFF</button>
+      <a href="../" class="btn link-btn">BACK TO ARCADE</a>
+    </div>
+  </div>
+
+  <div id="howto" class="overlay hidden">
+    <h2>HOW TO PLAY</h2>
+    <div class="howto-body">
+      <p><b>Desktop:</b> &#8592; &#8594; or A / D to move &middot; SPACE to shoot &middot; P or ESC to pause</p>
+      <p><b>Mobile:</b> hold &#9664; &#9654; to move &middot; FIRE to shoot</p>
+      <p>Shoot the aliens, dodge their plasma, and don't let them cross your defense line.</p>
+      <ul class="enemy-list">
+        <li><i class="dot basic"></i>Basic Alien — 10 pts</li>
+        <li><i class="dot fast"></i>Fast Alien — 20 pts</li>
+        <li><i class="dot armored"></i>Armored Alien — 30 pts (3 hits)</li>
+        <li><i class="dot elite"></i>Elite Alien — 50 pts (shoots back)</li>
+      </ul>
+      <p>A <b class="boss-word">BOSS</b> attacks every 5 waves — 250 bonus pts.</p>
+      <p>Power-ups: <b>Rapid Fire</b> &middot; <b>Double Shot</b> &middot; <b>Shield</b> &middot; <b>Repair</b></p>
+    </div>
+    <button id="btn-howto-back" class="btn">BACK</button>
+  </div>
+
+  <div id="pause-menu" class="overlay hidden">
+    <h2>PAUSED</h2>
+    <div class="menu-buttons">
+      <button id="btn-resume" class="big-btn">RESUME</button>
+      <button id="btn-restart" class="btn">RESTART</button>
+      <button id="btn-quit" class="btn">MAIN MENU</button>
+      <a href="../" class="btn link-btn">BACK TO ARCADE</a>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <h2>GAME OVER</h2>
+    <div class="stats">
+      <p>SCORE <span id="final-score">0</span></p>
+      <p>BEST <span id="final-best">0</span></p>
+      <p>WAVES SURVIVED <span id="final-waves">0</span></p>
+      <p id="new-best" class="hidden">&#9733; NEW BEST! &#9733;</p>
+    </div>
+    <div class="menu-buttons">
+      <button id="btn-again" class="big-btn">RESTART</button>
+      <button id="btn-menu" class="btn">MAIN MENU</button>
+      <a href="../" class="btn link-btn">BACK TO ARCADE</a>
+    </div>
+  </div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
