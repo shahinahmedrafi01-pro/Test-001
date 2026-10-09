@@ -62,6 +62,13 @@ function startBot() {
     log(`Spawned. Server version: ${bot.version}`);
     failCount = 0;
     lastLoginSent = 0;
+    // join notification (10-min cooldown so reconnect loops don't spam pings)
+    const nowJ = Date.now();
+    if (nowJ - lastJoinPingAt > 10 * 60 * 1000) {
+      lastJoinPingAt = nowJ;
+      pingOwner('🔔 Madara has joined the Minecraft server!');
+      log('Sent join notification to Discord.');
+    }
     setTimeout(sendLogin, 4000);
     // retry login a few times in case the auth plugin was slow
     setTimeout(sendLogin, 12000);
@@ -226,6 +233,11 @@ function clearBehavior() {
 function scheduleReconnect() {
   if (afkTimer) { clearInterval(afkTimer); afkTimer = null; }
   clearBehavior();
+  // unexpected disconnect: notify once per outage (stay quiet on further retries)
+  if (!shuttingDown && failCount === 0) {
+    pingOwner('⚠️ Madara lost connection to the Minecraft server! Reconnecting…');
+    log('Sent disconnect notification to Discord.');
+  }
   try { if (bot) bot.quit(); } catch (e) {}
   bot = null;
   failCount++;
@@ -240,6 +252,8 @@ function scheduleReconnect() {
 let discordClient = null;
 let discordChannel = null;
 let lastMadaraPingAt = 0; // anti-spam cooldown for Madara mention alerts
+let lastJoinPingAt = 0; // anti-spam cooldown for join notifications
+let shuttingDown = false; // true once SIGTERM starts graceful shutdown
 
 function sanitize(s) {
   return String(s).replace(/@/g, '@\u200b'); // stop @everyone / @here pings
@@ -247,6 +261,19 @@ function sanitize(s) {
 function sendToDiscord(text) {
   if (!discordChannel) return;
   discordChannel.send(String(text).slice(0, 1900)).catch(() => {});
+}
+// Mention the owner on Discord (fire-and-forget).
+function pingOwner(text) {
+  if (!config.discordOwnerId) return;
+  sendToDiscord(`<@${config.discordOwnerId}> ${text}`);
+}
+// Awaitable version for shutdown paths where the process is about to exit.
+async function pingOwnerAsync(text) {
+  if (!config.discordOwnerId || !discordChannel) return false;
+  try {
+    await discordChannel.send(`<@${config.discordOwnerId}> ${text}`.slice(0, 1900));
+    return true;
+  } catch (e) { return false; }
 }
 
 // Track messages the bot itself sends, so the relay doesn't echo them back.
@@ -395,6 +422,25 @@ async function replyPlayerList(msg) {
 process.on('uncaughtException', (err) => {
   log('UNCAUGHT: ' + err.message);
   scheduleReconnect();
+});
+
+// Graceful shutdown: GitHub Actions sends SIGTERM when the job hits its
+// timeout (the 5h scheduled restart) or when a newer run cancels this one.
+// Notify Discord first, then exit. Capped at 5s so a slow Discord can't hang us.
+let sigtermHandled = false;
+process.on('SIGTERM', () => {
+  if (sigtermHandled) return;
+  sigtermHandled = true;
+  shuttingDown = true;
+  log('SIGTERM received: workflow is stopping the bot. Sending leave notification...');
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 5000));
+  Promise.race([pingOwnerAsync('⚠️ Madara is leaving the Minecraft server!'), timeout])
+    .catch(() => {})
+    .finally(() => {
+      try { if (bot) bot.quit('Shutting down'); } catch (e) {}
+      try { if (discordClient) discordClient.destroy(); } catch (e) {}
+      process.exit(0);
+    });
 });
 
 startDiscord();
