@@ -88,27 +88,34 @@ function startBot() {
   // Raw-message fallback: some servers use custom chat formats that mineflayer's
   // 'chat' event doesn't parse. This keeps the Discord relay, !hii and login
   // detection working on those servers too.
-  bot.on('messagestr', (msgStr) => {
+  bot.on('messagestr', (msgStr, _pos, _orig, sender) => {
     try {
       const s = (msgStr || '').trim();
       if (!s) return;
-      // skip the bot's own messages; never relay anything containing the login command
-      if (s.includes(config.username)) return;
+      const senderName = nameForSender(sender);
+      // skip the bot's own messages
+      if (senderName === config.username) return;
+      if (!senderName) {
+        // unknown sender: fall back to text heuristics
+        if (s.includes(config.username)) return;
+        // skip echo of something the bot just said itself (e.g. via !say)
+        if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return;
+      }
+      // never relay anything containing the login command
       if (config.loginCommand && s.includes(config.loginCommand)) return;
-      // skip echo of something the bot just said itself (e.g. via !say)
-      if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return;
       // login prompt fallback
       if (/\/login|please login|log in/i.test(s)) {
         log('Server asked for login (raw), sending command...');
         setTimeout(sendLogin, 1500);
       }
-      // !hii fallback for custom formats like "PLAYER name » !hii"
+      // !hii fallback for custom chat formats
       if (/!hii\s*$/i.test(s)) {
-        log('!hii detected (raw).');
+        log(`!hii detected${senderName ? ' from ' + senderName : ''} (raw).`);
         tryHiiReply();
       }
-      // relay the game message -> Discord, in clean <name> message form
-      sendToDiscord(sanitize(prettyRelay(s)));
+      // relay -> Discord, with the sender's in-game name when known
+      const out = senderName ? `<${senderName}> ${s}` : prettyRelay(s);
+      sendToDiscord(sanitize(out));
     } catch (e) { /* ignore */ }
   });
 
@@ -251,6 +258,19 @@ function prettyRelay(s) {
   return clean.trim();
 }
 
+// Resolve a chat packet sender UUID -> player name via the tab list.
+function nameForSender(sender) {
+  if (!sender || !bot || !bot.players) return null;
+  const su = String(sender).toLowerCase().replace(/-/g, '');
+  if (!su) return null;
+  for (const name of Object.keys(bot.players)) {
+    const p = bot.players[name];
+    const pu = String((p && p.uuid) || '').toLowerCase().replace(/-/g, '');
+    if (pu && pu === su) return name;
+  }
+  return null;
+}
+
 async function startDiscord() {
   if (!config.discordToken) {
     log('Discord bridge disabled (DISCORD_MC_TOKEN not set).');
@@ -292,10 +312,25 @@ async function startDiscord() {
       if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
       if (config.discordOwnerId && msg.author.id !== config.discordOwnerId) return; // owner only
       const text = (msg.content || '').trim();
+      const low = text.toLowerCase();
+      // !players -> list who's online on the MC server
+      if (low === '!players') {
+        if (!bot || !bot.entity) {
+          await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
+          return;
+        }
+        const names = Object.keys(bot.players || {}).filter((n) => n !== bot.username).sort();
+        const reply = names.length
+          ? `Online players (${names.length}): ${names.join(', ')}`
+          : 'No other players online right now.';
+        await msg.reply(reply.slice(0, 1900)).catch(() => {});
+        log(`Discord !players -> ${names.length} players.`);
+        return;
+      }
       let mcText = null;
-      if (text.toLowerCase().startsWith('!say ')) {
+      if (low.startsWith('!say ')) {
         mcText = text.slice(5).trim(); // starts with / => runs as a command
-      } else if (text.toLowerCase().startsWith('!cmd ')) {
+      } else if (low.startsWith('!cmd ')) {
         mcText = '/' + text.slice(5).trim().replace(/^\/+/, '');
       } else {
         return;
