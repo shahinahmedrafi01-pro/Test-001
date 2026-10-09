@@ -30,7 +30,7 @@ function tryHiiReply() {
   if (now - lastHiiAt < 20000) return; // 20s global cooldown
   lastHiiAt = now;
   try {
-    bot.chat('hii');
+    botSay('hii');
     log('Said hii.');
   } catch (e) { log('hii reply failed: ' + e.message); }
 }
@@ -44,7 +44,7 @@ function sendLogin() {
   if (now - lastLoginSent < 10000) return; // don't spam
   lastLoginSent = now;
   try {
-    bot.chat(config.loginCommand);
+    botSay(config.loginCommand);
     log('Sent login command.');
   } catch (e) { log('Login chat failed: ' + e.message); }
 }
@@ -95,6 +95,8 @@ function startBot() {
       // skip the bot's own messages; never relay anything containing the login command
       if (s.includes(config.username)) return;
       if (config.loginCommand && s.includes(config.loginCommand)) return;
+      // skip echo of something the bot just said itself (e.g. via !say)
+      if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return;
       // login prompt fallback
       if (/\/login|please login|log in/i.test(s)) {
         log('Server asked for login (raw), sending command...');
@@ -105,8 +107,8 @@ function startBot() {
         log('!hii detected (raw).');
         tryHiiReply();
       }
-      // relay the raw game message -> Discord
-      sendToDiscord(sanitize(s));
+      // relay the game message -> Discord, in clean <name> message form
+      sendToDiscord(sanitize(prettyRelay(s)));
     } catch (e) { /* ignore */ }
   });
 
@@ -228,6 +230,27 @@ function sendToDiscord(text) {
   discordChannel.send(String(text).slice(0, 1900)).catch(() => {});
 }
 
+// Track messages the bot itself sends, so the relay doesn't echo them back.
+let lastBotSay = { text: '', at: 0 };
+function botSay(text) {
+  lastBotSay = { text: String(text), at: Date.now() };
+  bot.chat(text);
+}
+
+// Turn HavenCraft-style "RANK name » message" into clean "<name> message".
+// Anything else (auctions, join/leave, system) is passed through as-is.
+function prettyRelay(s) {
+  const clean = String(s).replace(/§[0-9a-fk-or]/gi, '');
+  const m = clean.match(/^(.*?)»\s*([\s\S]*)$/);
+  if (m) {
+    const tokens = m[1].trim().split(/\s+/);
+    let name = tokens[tokens.length - 1] || '';
+    name = name.replace(/^[^a-zA-Z0-9_]+/, '').replace(/[^a-zA-Z0-9_]+$/, '');
+    if (name) return `<${name}> ${m[2].trim()}`;
+  }
+  return clean.trim();
+}
+
 async function startDiscord() {
   if (!config.discordToken) {
     log('Discord bridge disabled (DISCORD_MC_TOKEN not set).');
@@ -282,7 +305,7 @@ async function startDiscord() {
         await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
         return;
       }
-      bot.chat(mcText);
+      botSay(mcText);
       log(`Discord -> MC: ${mcText.slice(0, 80)}`);
       await msg.react('✅').catch(() => {});
     } catch (e) {
