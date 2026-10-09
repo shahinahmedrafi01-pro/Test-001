@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Police Chase — Rafi's Mini Arcade</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-wrap">
+  <canvas id="game"></canvas>
+  <a class="back-link" href="../">‹ ARCADE</a>
+
+  <div id="chase-wrap" class="hidden">
+    <div class="ctag">🚔 CHASE</div>
+    <div id="chase-track"><div id="chase-fill"></div></div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div class="hud-col">
+      <div class="hud-row"><span class="label">SCORE</span><span id="hud-score" class="val">0</span></div>
+      <div class="hud-row"><span class="label">BEST</span><span id="hud-best" class="val">0</span></div>
+    </div>
+    <div class="hud-col center">
+      <div id="hud-speed"><span id="hud-speed-num">0</span><small> km/h</small></div>
+      <div id="hud-dist">0 m</div>
+    </div>
+    <div class="hud-col right">
+      <div id="hud-lives" aria-label="Lives"></div>
+      <button id="btn-pause" aria-label="Pause">❚❚</button>
+    </div>
+  </div>
+
+  <div id="power-row"></div>
+
+  <div id="touch-controls" class="hidden">
+    <div class="tc-move">
+      <button id="btn-left" aria-label="Move left">◀</button>
+      <button id="btn-right" aria-label="Move right">▶</button>
+    </div>
+  </div>
+
+  <div id="banner" class="hidden"></div>
+
+  <div id="menu" class="overlay">
+    <h1 class="title">POLICE<span>CHASE</span></h1>
+    <p class="subtitle">Outrun the cops. Dodge the traffic. Don't get busted.</p>
+    <div class="menu-btns">
+      <button id="btn-start" class="big primary">▶ START ENGINE</button>
+      <button id="btn-howto" class="big">HOW TO PLAY</button>
+    </div>
+    <button id="btn-sound">🔇 SOUND OFF</button>
+  </div>
+
+  <div id="howto" class="overlay hidden">
+    <h1 class="title">HOW TO<span>PLAY</span></h1>
+    <div class="howto-list">
+      <div><b>← →</b> / <b>A D</b> or <b>swipe</b> — switch lanes</div>
+      <div><b>P</b> — pause · <b>M</b> — sound</div>
+      <div>🚔 Cops chase from behind — don't let them ram you</div>
+      <div>💥 3 hits and you're busted</div>
+      <div><b>N</b> Nitro — speed + double score</div>
+      <div><b>S</b> Shield — blocks one crash</div>
+      <div><b>P</b> Phase — drive through traffic</div>
+      <div><b>+</b> Repair — restores 1 life</div>
+      <div>Near misses earn bonus points!</div>
+    </div>
+    <div class="menu-btns">
+      <button id="btn-howto-back" class="big">‹ BACK</button>
+    </div>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <h1 class="title">PAUSED</h1>
+    <div class="menu-btns">
+      <button id="btn-resume" class="big primary">▶ RESUME</button>
+      <button id="btn-restart" class="big">↻ RESTART</button>
+      <button id="btn-quit" class="big danger">QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <div id="over" class="overlay hidden">
+    <h1 class="title">BUSTED!</h1>
+    <p class="subtitle">The cops finally caught you.</p>
+    <div id="newbest" class="hidden">★ NEW BEST! ★</div>
+    <div class="final-score">SCORE<b id="over-score">0</b></div>
+    <div class="stat-line">DISTANCE <b id="over-dist">0 m</b> · BEST <b id="over-best">0</b></div>
+    <div class="menu-btns">
+      <button id="btn-again" class="big primary">↻ DRIVE AGAIN</button>
+      <button id="btn-over-menu" class="big">‹ ARCADE MENU</button>
+    </div>
+  </div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>

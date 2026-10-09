@@ -10,4 +10,5 @@
   }
   show("best-dino", "dinoHi");
   show("best-alien", "alienDefenseBest");
+  show("best-police", "policeChaseBest");
 })();
