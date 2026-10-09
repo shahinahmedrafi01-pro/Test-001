@@ -23,7 +23,17 @@ let bot = null;
 let afkTimer = null;
 let behaviorTimers = [];
 let lastLoginSent = 0;
-const hiiCooldown = {}; // username -> last !hii trigger timestamp
+let lastHiiAt = 0; // global cooldown so !hii can't spam from any path
+
+function tryHiiReply() {
+  const now = Date.now();
+  if (now - lastHiiAt < 20000) return; // 20s global cooldown
+  lastHiiAt = now;
+  try {
+    bot.chat('hii');
+    log('Said hii.');
+  } catch (e) { log('hii reply failed: ' + e.message); }
+}
 
 function sendLogin() {
   if (!config.loginCommand) {
@@ -63,23 +73,41 @@ function startBot() {
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
     log(`<${username}> ${message}`);
-    // relay game chat -> Discord bridge channel
-    sendToDiscord(`**<${username}>** ${sanitize(message)}`);
     // AuthMe-style prompt -> send login right away
     if (/\/login|please login|log in/i.test(message)) {
       log('Server asked for login, sending command...');
       setTimeout(sendLogin, 1500);
     }
-    // !hii command -> bot says "hii" (15s cooldown per user to avoid spam)
+    // !hii command -> bot says "hii"
     if (message.trim().toLowerCase() === '!hii') {
-      const now = Date.now();
-      if (now - (hiiCooldown[username] || 0) < 15000) return;
-      hiiCooldown[username] = now;
-      try {
-        bot.chat('hii');
-        log(`Said hii (triggered by ${username}).`);
-      } catch (e) { log('hii reply failed: ' + e.message); }
+      log(`!hii from ${username}.`);
+      tryHiiReply();
     }
+  });
+
+  // Raw-message fallback: some servers use custom chat formats that mineflayer's
+  // 'chat' event doesn't parse. This keeps the Discord relay, !hii and login
+  // detection working on those servers too.
+  bot.on('messagestr', (msgStr) => {
+    try {
+      const s = (msgStr || '').trim();
+      if (!s) return;
+      // skip the bot's own messages; never relay anything containing the login command
+      if (s.includes(config.username)) return;
+      if (config.loginCommand && s.includes(config.loginCommand)) return;
+      // login prompt fallback
+      if (/\/login|please login|log in/i.test(s)) {
+        log('Server asked for login (raw), sending command...');
+        setTimeout(sendLogin, 1500);
+      }
+      // !hii fallback for custom formats like "PLAYER name » !hii"
+      if (/!hii\s*$/i.test(s)) {
+        log('!hii detected (raw).');
+        tryHiiReply();
+      }
+      // relay the raw game message -> Discord
+      sendToDiscord(sanitize(s));
+    } catch (e) { /* ignore */ }
   });
 
   bot.on('kicked', (reason) => {
