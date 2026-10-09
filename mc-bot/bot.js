@@ -312,28 +312,26 @@ async function startDiscord() {
       if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
       if (config.discordOwnerId && msg.author.id !== config.discordOwnerId) return; // owner only
       const text = (msg.content || '').trim();
+      if (!text) return;
       const low = text.toLowerCase();
-      // !players -> list who's online on the MC server
-      if (low === '!players') {
-        if (!bot || !bot.entity) {
-          await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
-          return;
-        }
-        const names = Object.keys(bot.players || {}).filter((n) => n !== bot.username).sort();
-        const reply = names.length
-          ? `Online players (${names.length}): ${names.join(', ')}`
-          : 'No other players online right now.';
-        await msg.reply(reply.slice(0, 1900)).catch(() => {});
-        log(`Discord !players -> ${names.length} players.`);
+
+      // Playerlist -> reply with online players (not sent to the game)
+      if (low === 'playerlist' || low === '!players') {
+        await replyPlayerList(msg);
         return;
       }
+
       let mcText = null;
       if (low.startsWith('!say ')) {
         mcText = text.slice(5).trim(); // starts with / => runs as a command
       } else if (low.startsWith('!cmd ')) {
         mcText = '/' + text.slice(5).trim().replace(/^\/+/, '');
-      } else {
+      } else if (low.startsWith('!')) {
+        await msg.reply('Commands: Playerlist | !say <msg> | !cmd <command>').catch(() => {});
         return;
+      } else {
+        // direct mode: plain message -> game chat (no !say needed)
+        mcText = text.replace(/\s*\n\s*/g, ' ').trim();
       }
       if (!mcText) return;
       if (!bot || !bot.entity) {
@@ -347,6 +345,19 @@ async function startDiscord() {
       log('Discord message handler error: ' + e.message);
     }
   });
+
+async function replyPlayerList(msg) {
+  if (!bot || !bot.entity) {
+    await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
+    return;
+  }
+  const names = Object.keys(bot.players || {}).filter((n) => n !== bot.username).sort();
+  const reply = names.length
+    ? `Server ${names.length} online: ${names.join(', ')}`
+    : 'Server 0 online.';
+  await msg.reply(reply.slice(0, 1900)).catch(() => {});
+  log(`Discord playerlist -> ${names.length} players.`);
+}
 
   discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
   try {
