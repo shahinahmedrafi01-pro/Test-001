@@ -243,7 +243,7 @@ function clearBehavior() {
 }
 
 /* ---------- auto-totem: keep Totems of Undying in both hands ---------- */
-const TOTEM_REPLACE_DELAY_MS = 3500; // configurable replacement delay (3000-4000ms)
+const TOTEM_REPLACE_DELAY_MS = 2000; // configurable replacement delay
 let totemRefillTimer = null;
 let totemRefillBusy = false;
 let lastNoTotemLogAt = 0;
