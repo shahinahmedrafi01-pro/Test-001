@@ -147,6 +147,17 @@ function startBot() {
     log('Connection ended.');
     scheduleReconnect();
   });
+
+  // Totem pop detection: entity_status 35 on our own entity = a totem just popped.
+  bot._client.on('entity_status', (packet) => {
+    try {
+      if (!bot || !bot.entity) return;
+      if (packet.entityId === bot.entity.id && packet.entityStatus === 35) {
+        log('Totem popped! Scheduling replacement...');
+        scheduleTotemRefill();
+      }
+    } catch (e) { /* ignore */ }
+  });
 }
 
 /* ---------- anti-AFK: gentle look-around ---------- */
@@ -221,12 +232,79 @@ function startBehavior() {
   behaviorTimers.push(setInterval(() => doubleCrouch(), 2 * 60 * 1000));
   // every 3 seconds: if a player is within 6 blocks, look at them + double-crouch
   behaviorTimers.push(setInterval(() => greetIfPlayerNear(), 3000));
+  // every 15 seconds: top up empty hands with totems (covers "became empty" cases)
+  behaviorTimers.push(setInterval(() => refillTotems(), 15000));
   log('Behavior timers started (double-crouch every 2 min, greet nearby players).');
 }
 function clearBehavior() {
   behaviorTimers.forEach(clearInterval);
   behaviorTimers = [];
   behaviorBusy = false;
+}
+
+/* ---------- auto-totem: keep Totems of Undying in both hands ---------- */
+const TOTEM_REPLACE_DELAY_MS = 3500; // configurable replacement delay (3000-4000ms)
+let totemRefillTimer = null;
+let totemRefillBusy = false;
+let lastNoTotemLogAt = 0;
+
+function handHasTotem(dest) {
+  try {
+    if (!bot || !bot.inventory) return false;
+    const slot = bot.getEquipmentDestSlot(dest); // 'off-hand' or 'hand'
+    const item = bot.inventory.slots[slot];
+    return !!item && item.name === 'totem_of_undying';
+  } catch (e) { return false; }
+}
+
+// Find a totem in the main inventory, ignoring ones already equipped,
+// so we never steal a totem from one hand to fill the other.
+function findSpareTotem() {
+  try {
+    if (!bot || !bot.inventory) return null;
+    const skip = new Set();
+    try { skip.add(bot.getEquipmentDestSlot('off-hand')); } catch (e) {}
+    try { skip.add(bot.getEquipmentDestSlot('hand')); } catch (e) {}
+    return bot.inventory.items().find((it) => it && it.name === 'totem_of_undying' && !skip.has(it.slot)) || null;
+  } catch (e) { return null; }
+}
+
+// One refill pass: offhand first (survival priority), then main hand.
+// Lock-guarded so repeated pops can never overlap; no totems -> do nothing.
+async function refillTotems() {
+  if (totemRefillBusy) return;
+  if (!bot || !bot.entity || !bot.inventory) return;
+  totemRefillBusy = true;
+  try {
+    for (const dest of ['off-hand', 'hand']) {
+      if (handHasTotem(dest)) continue;
+      const totem = findSpareTotem();
+      if (!totem) {
+        const nowL = Date.now();
+        if (nowL - lastNoTotemLogAt > 5 * 60 * 1000) {
+          lastNoTotemLogAt = nowL;
+          log(`Auto-totem: no spare totem for ${dest} (waiting for one).`);
+        }
+        continue;
+      }
+      try {
+        await bot.equip(totem, dest);
+        log(`Auto-totem: equipped totem to ${dest}.`);
+      } catch (e) {
+        log(`Auto-totem equip failed (${dest}): ${e.message}`);
+      }
+    }
+  } catch (e) { /* ignore */ }
+  totemRefillBusy = false;
+}
+
+// Debounced: pops during the wait collapse into a single refill pass.
+function scheduleTotemRefill() {
+  if (totemRefillTimer) return; // already scheduled
+  totemRefillTimer = setTimeout(() => {
+    totemRefillTimer = null;
+    refillTotems();
+  }, TOTEM_REPLACE_DELAY_MS);
 }
 
 /* ---------- reconnect logic ---------- */
