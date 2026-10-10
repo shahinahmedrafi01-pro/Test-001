@@ -112,11 +112,11 @@ function startBot() {
       if (config.loginCommand && s.includes(config.loginCommand)) return;
       // Madara/Rafi mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
-      // Shares the 60s cooldown with the Discord-side alert: no mention spam.
+      // 10-minute cooldown for in-game mentions: no mention spam.
       if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi'))) {
         const now = Date.now();
-        if (now - lastMadaraPingAt > 60000) {
-          lastMadaraPingAt = now;
+        if (now - lastMcMentionPingAt > 10 * 60 * 1000) {
+          lastMcMentionPingAt = now;
           sendToDiscord(`<@${config.discordOwnerId}> 🔔 Someone mentioned you on the server!`);
           log(`Mention alert (MC) from ${senderName}.`);
         }
@@ -243,7 +243,7 @@ function clearBehavior() {
 }
 
 /* ---------- auto-totem: keep Totems of Undying in both hands ---------- */
-const TOTEM_REPLACE_DELAY_MS = 2000; // configurable replacement delay
+const TOTEM_REPLACE_DELAY_MS = 6000; // configurable replacement delay
 let totemRefillTimer = null;
 let totemRefillBusy = false;
 let lastNoTotemLogAt = 0;
@@ -324,7 +324,8 @@ function scheduleReconnect() {
 /* ---------- Discord bridge (remote control + chat relay) ---------- */
 let discordClient = null;
 let discordChannel = null;
-let lastMadaraPingAt = 0; // anti-spam cooldown for Madara mention alerts
+let lastMadaraPingAt = 0; // anti-spam cooldown for Discord-side Madara mention alerts
+let lastMcMentionPingAt = 0; // anti-spam cooldown for in-game (MC) mention alerts: 10 min
 let lastJoinPingAt = 0; // anti-spam cooldown for join notifications
 
 function sanitize(s) {
