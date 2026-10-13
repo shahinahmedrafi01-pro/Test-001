@@ -48,7 +48,41 @@ var AudioSys = {
   thud: function () { this.noise(0.2, 0.2); this.tone(70, 0.25, "sawtooth", 0.12, 35); },
   beam: function () { this.tone(1200, 0.5, "sine", 0.04, 300); },
   boom: function () { this.noise(0.5, 0.2); this.tone(60, 0.4, "sawtooth", 0.1, 30); },
-  click: function () { this.tone(520, 0.06, "square", 0.05); }
+  click: function () { this.tone(520, 0.06, "square", 0.05); },
+  /* continuous engine hum — pitch + rumble follow the car's speed */
+  eng: null,
+  engineStart: function () {
+    if (!this.enabled || this.eng) return;
+    var ctx = this.ensure(); if (!ctx) return;
+    var o1 = ctx.createOscillator(), o2 = ctx.createOscillator();
+    var f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o1.type = "sawtooth"; o1.frequency.value = 70;
+    o2.type = "square"; o2.frequency.value = 35;
+    f.type = "lowpass"; f.frequency.value = 400; f.Q.value = 1;
+    g.gain.value = 0.0001;
+    g.gain.exponentialRampToValueAtTime(0.045, ctx.currentTime + 0.3);
+    o1.connect(f); o2.connect(f); f.connect(g); g.connect(ctx.destination);
+    o1.start(); o2.start();
+    this.eng = { o1: o1, o2: o2, f: f, g: g };
+  },
+  engineUpdate: function (kmh) {
+    if (!this.eng || !this.ctx) return;
+    var t = this.ctx.currentTime;
+    var fr = 50 + kmh * 0.55;              // ~88 Hz cruising, ~155 Hz on nitro
+    this.eng.o1.frequency.setTargetAtTime(fr, t, 0.1);
+    this.eng.o2.frequency.setTargetAtTime(fr / 2, t, 0.1);
+    this.eng.f.frequency.setTargetAtTime(300 + kmh * 3, t, 0.1);
+    this.eng.g.gain.setTargetAtTime(0.035 + Math.min(0.03, kmh * 0.00015), t, 0.1);
+  },
+  engineStop: function () {
+    if (!this.eng) return;
+    var ctx = this.ctx, e = this.eng; this.eng = null;
+    if (!ctx) return;
+    try {
+      e.g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.08);
+      e.o1.stop(ctx.currentTime + 0.25); e.o2.stop(ctx.currentTime + 0.25);
+    } catch (err) {}
+  }
 };
 
 /* ---------- constants ---------- */
@@ -378,6 +412,7 @@ function update(dt) {
   var effSpeed = (speedKmh + (nitroT > 0 ? 60 : 0)) * (slowT > 0 ? 0.55 : 1);
   var roadV = effSpeed * PPK;             // px/s of road scroll
   roadOff = (roadOff + roadV * dt) % 60;
+  AudioSys.engineUpdate(effSpeed);
 
   distM += effSpeed * dt / 3.6;
   score += effSpeed * dt * 0.12 * (nitroT > 0 ? 2 : 1);
@@ -854,25 +889,26 @@ function startGame() {
   AudioSys.ensure(); AudioSys.click();
   resetGame();
   state = "playing";
+  AudioSys.engineStart();
   updateLives(); updatePowerRow(); updateHUD();
   showOverlay(null);
   banner("GO!", "#4ade80");
 }
 function pauseGame() {
   if (state !== "playing") return;
-  state = "paused"; AudioSys.click(); showOverlay("pause");
+  state = "paused"; AudioSys.click(); AudioSys.engineStop(); showOverlay("pause");
 }
 function resumeGame() {
   if (state !== "paused") return;
   AudioSys.ensure(); AudioSys.click();
-  state = "playing"; showOverlay(null);
+  state = "playing"; AudioSys.engineStart(); showOverlay(null);
   lastT = performance.now();
 }
 function gameOver(kind) {
   kind = kind || "busted";
   state = "gameover";
   arresting = false; wobX = 0;
-  AudioSys.over();
+  AudioSys.over(); AudioSys.engineStop();
   if (kind === "busted") burst(px, playerY, "#ef4444", 40, 320);
   else AudioSys.siren();
   if (kind === "arrested") {
@@ -891,7 +927,7 @@ function gameOver(kind) {
   el.newbest.classList.toggle("hidden", !isBest);
   showOverlay("over");
 }
-function toMenu() { state = "menu"; AudioSys.click(); showOverlay("menu"); }
+function toMenu() { state = "menu"; AudioSys.click(); AudioSys.engineStop(); showOverlay("menu"); }
 
 /* ---------- input ---------- */
 function moveLeft() {
@@ -986,7 +1022,8 @@ on("btn-over-menu", toMenu);
 
 function toggleSound() {
   AudioSys.enabled = !AudioSys.enabled;
-  if (AudioSys.enabled) AudioSys.ensure();
+  if (AudioSys.enabled) { AudioSys.ensure(); if (state === "playing") AudioSys.engineStart(); }
+  else AudioSys.engineStop();
   el.btn_sound.textContent = AudioSys.enabled ? "🔊 SOUND ON" : "🔇 SOUND OFF";
   el.btn_sound.classList.toggle("on", AudioSys.enabled);
 }
@@ -1032,6 +1069,10 @@ window.__t = {
   get trafficKinds() { return traffic.map(function (t) { return t.kind; }); },
   get policeN() { return police.length; },
   get nitroT() { return nitroT; },
+  get engineOn() { return !!AudioSys.eng; },
+  engineFreq: function () { return AudioSys.eng ? AudioSys.eng.o1.frequency.value : 0; },
+  toggleSound: toggleSound,
+  gameOver: gameOver, toMenu: toMenu,
   get shieldT() { return shieldT; },
   get phaseT() { return phaseT; },
   get iframes() { return iframes; },
