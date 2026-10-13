@@ -16,6 +16,7 @@
       credits: "Original game built for this site.",
       route: "police-chase/",
       cover: "img/cover-police-chase.svg",
+      price: 30, // one-time unlock price in diamonds (0 / absent = free)
       scoreKey: "policeChaseBest",
       scoreLabel: "Best score"
     }
@@ -54,7 +55,19 @@
     get compact() { return lsGet("gg_compact", false) === true; },
     set compact(v) { lsSet("gg_compact", !!v); },
     get avatar() { var a = lsGet("gg_avatar", ""); return AVATARS.some(function (x) { return x.id === a; }) ? a : ""; },
-    set avatar(v) { lsSet("gg_avatar", String(v)); }
+    set avatar(v) { lsSet("gg_avatar", String(v)); },
+    get diamonds() { var v = lsGet("gg_diamonds", 0); return typeof v === "number" && v > 0 ? Math.floor(v) : 0; },
+    set diamonds(v) { lsSet("gg_diamonds", Math.max(0, Math.floor(v))); },
+    get shopUser() { return lsGet("gg_shop_user", ""); },
+    set shopUser(v) { lsSet("gg_shop_user", String(v || "").slice(0, 24)); },
+    get shopOrders() { var v = lsGet("gg_orders", []); return Array.isArray(v) ? v : []; },
+    set shopOrders(v) { lsSet("gg_orders", v); },
+    get claimed() { var v = lsGet("gg_claimed", []); return Array.isArray(v) ? v : []; },
+    set claimed(v) { lsSet("gg_claimed", v); },
+    get owned() { var v = lsGet("gg_owned", []); return Array.isArray(v) ? v : []; },
+    set owned(v) { lsSet("gg_owned", v); },
+    get bonuses() { var v = lsGet("gg_bonuses", {}); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; },
+    set bonuses(v) { lsSet("gg_bonuses", v); }
   };
 
   function gameById(id) { for (var i = 0; i < GAMES.length; i++) if (GAMES[i].id === id) return GAMES[i]; return null; }
@@ -101,12 +114,12 @@
   /* ---------------- modals ---------------- */
   function openModal(id) { $(id).hidden = false; }
   function closeModals() {
-    ["info-modal", "about-modal", "confirm-modal"].forEach(function (id) { $(id).hidden = true; });
+    ["info-modal", "about-modal", "confirm-modal", "shop-modal", "buy-modal"].forEach(function (id) { $(id).hidden = true; });
   }
   document.querySelectorAll("[data-close]").forEach(function (b) {
     b.addEventListener("click", closeModals);
   });
-  ["info-modal", "about-modal", "confirm-modal"].forEach(function (id) {
+  ["info-modal", "about-modal", "confirm-modal", "shop-modal", "buy-modal"].forEach(function (id) {
     $(id).addEventListener("click", function (e) { if (e.target === $(id)) closeModals(); });
   });
   document.addEventListener("keydown", function (e) {
@@ -114,18 +127,22 @@
   });
 
   /* ---------------- game cards ---------------- */
+  function isOwned(id) { return store.owned.indexOf(id) !== -1; }
   function cardHTML(g) {
     var fav = store.favs.indexOf(g.id) !== -1;
+    var owned = isOwned(g.id);
+    var priceTag = g.price ? (owned ? '<div class="gprice owned">✓ Owned</div>' : '<div class="gprice">🔒 ' + g.price + " 💎 to unlock</div>") : "";
+    var playLabel = g.price && !owned ? "🔒 " + g.price + " 💎" : "▶ Play";
     return '<article class="gcard' + (fav ? " is-fav" : "") + '" data-id="' + g.id + '" tabindex="0" role="button" aria-label="' + esc(g.title) + '">' +
       '<div class="cover"><img src="' + g.cover + '" alt="' + esc(g.title) + ' cover" loading="lazy">' +
       '<span class="fav-flag" title="Favorite">★</span>' +
       '<div class="card-actions"><div class="ca-title">' + esc(g.title) + '</div>' +
       '<div class="ca-row">' +
-      '<a class="btn-play" href="' + g.route + '" data-play="' + g.id + '">▶ Play</a>' +
+      '<a class="btn-play" href="' + g.route + '" data-play="' + g.id + '">' + playLabel + '</a>' +
       '<button class="icon-btn" data-info="' + g.id + '" aria-label="Game details">ⓘ</button>' +
       '<button class="icon-btn fav' + (fav ? " is-fav" : "") + '" data-fav="' + g.id + '" aria-label="Toggle favorite" aria-pressed="' + fav + '">' + (fav ? "★" : "☆") + "</button>" +
       "</div></div></div>" +
-      '<div class="gtitle">' + esc(g.title) + '</div><div class="gsub">' + esc(g.genre) + "</div></article>";
+      '<div class="gtitle">' + esc(g.title) + '</div><div class="gsub">' + esc(g.genre) + "</div>" + priceTag + "</article>";
   }
   function renderGrid(el, games) { el.innerHTML = games.map(cardHTML).join(""); }
 
@@ -147,7 +164,12 @@
     var infoBtn = e.target.closest("[data-info]");
     if (infoBtn) { e.preventDefault(); e.stopPropagation(); openInfo(infoBtn.getAttribute("data-info")); return; }
     var playLink = e.target.closest("[data-play]");
-    if (playLink) { recordRecent(playLink.getAttribute("data-play")); return; } // then navigate normally
+    if (playLink) {
+      var pid = playLink.getAttribute("data-play");
+      var pg = gameById(pid);
+      if (pg && pg.price && !isOwned(pid)) { e.preventDefault(); openBuyModal(pg); return; } // paywalled -> buy first
+      recordRecent(pid); return; // then navigate normally
+    }
     var card = e.target.closest(".gcard");
     if (card) {
       if (selectedCard === card) deselectCard();
@@ -177,6 +199,7 @@
     $("im-credits").textContent = g.credits;
     var pl = $("im-play");
     pl.href = g.route; pl.setAttribute("data-play", g.id);
+    pl.textContent = g.price && !isOwned(g.id) ? "🔒 Buy — " + g.price + " 💎" : "▶  Play";
     openModal("info-modal");
   }
 
@@ -198,10 +221,13 @@
       v.classList.toggle("is-active", v.id === "view-" + name);
     });
     deselectCard(); closeDrawer(); closeAvatarMenu();
+    var fab = $("shop-fab");
+    if (fab) fab.hidden = (name === "shop");
     if (name === "profile") renderProfile();
     if (name === "favorites") renderFavorites();
     if (name === "recent") renderRecent();
     if (name === "home") renderHome();
+    if (name === "shop") renderShop();
     window.scrollTo(0, 0);
   }
   document.querySelectorAll("[data-view]").forEach(function (b) {
@@ -376,6 +402,242 @@
     });
   });
 
+  /* ---------------- diamond balance displays ---------------- */
+  function syncDiamondDisplays() {
+    var n = store.diamonds.toLocaleString("en-US");
+    var sb = $("shop-balance"); if (sb) sb.textContent = n;
+    var tb = $("topbar-diamonds-n"); if (tb) tb.textContent = n;
+  }
+  /* Register a diamond account: first time a username is created on
+     this device it gets a +30 welcome bonus. New username = new account. */
+  function registerAccount(u) {
+    u = String(u || "").trim();
+    if (u.length < 2) { toast("Enter a username (min 2 characters)"); return false; }
+    store.shopUser = u;
+    var b = store.bonuses;
+    if (!b[u]) {
+      b[u] = true; store.bonuses = b;
+      store.diamonds = store.diamonds + 30;
+      toast("Welcome bonus +30 💎!");
+    }
+    syncDiamondDisplays();
+    return true;
+  }
+
+  /* ---------------- buy game (one-time unlock) ---------------- */
+  var buyTarget = null;
+  function syncFeatured() {
+    var btn = document.querySelector('#featured [data-play="police-chase"]');
+    if (btn) btn.textContent = isOwned("police-chase") ? "▶ Play Now" : "🔒 Buy — 30 💎";
+  }
+  function renderBuyModal() {
+    if (!buyTarget) return;
+    var hasAccount = store.shopUser.length >= 2;
+    $("buy-balance").textContent = store.diamonds.toLocaleString("en-US");
+    $("buy-username-row").hidden = hasAccount;
+    $("buy-account-note").hidden = !hasAccount;
+    $("buy-account-name").textContent = store.shopUser;
+    var canBuy = hasAccount && store.diamonds >= buyTarget.price;
+    var needMore = hasAccount && store.diamonds < buyTarget.price;
+    $("buy-confirm").hidden = !canBuy;
+    $("buy-shop").hidden = !needMore;
+    var need = $("buy-need-note");
+    if (needMore) {
+      need.hidden = false;
+      need.textContent = "You need " + (buyTarget.price - store.diamonds) + " more diamonds to unlock this game.";
+    } else need.hidden = true;
+  }
+  function openBuyModal(g) {
+    buyTarget = g;
+    $("buy-title").textContent = "Unlock " + g.title;
+    $("buy-username").value = store.shopUser;
+    renderBuyModal();
+    openModal("buy-modal");
+  }
+  $("buy-create").addEventListener("click", function () {
+    if (registerAccount($("buy-username").value)) renderBuyModal();
+  });
+  $("buy-confirm").addEventListener("click", function () {
+    if (!buyTarget) return;
+    var g = buyTarget;
+    askConfirm("Unlock " + g.title + "?", g.price + " diamonds will be deducted. One-time purchase — play forever.", "Unlock", function () {
+      store.diamonds = store.diamonds - g.price;
+      var owned = store.owned;
+      if (owned.indexOf(g.id) === -1) owned.push(g.id);
+      store.owned = owned;
+      syncDiamondDisplays(); syncFeatured(); refreshDynamic();
+      toast(g.title + " unlocked! Enjoy!");
+      window.location.href = g.route;
+    });
+  });
+  $("buy-shop").addEventListener("click", function () { closeModals(); setView("shop"); });
+  $("shop-fab").addEventListener("click", function () { setView("shop"); });
+  $("topbar-diamonds").addEventListener("click", function () { setView("shop"); });
+
+  /* ---------------- diamond shop ---------------- */
+  /* Backend: Google Apps Script web app (see shop-backend/Code.gs).
+     SHOP_API_URL is the deployed Web app URL (ends with /exec).
+     It stays empty until the backend is deployed — the shop then
+     shows "backend not connected" instead of broken ordering. */
+  var SHOP_API_URL = "";
+  var BKASH_NUMBER = "01516523070";
+  var PACKAGES = [
+    { id: "p90", name: "90 Diamonds", diamonds: 90, price: 90 },
+    { id: "p180", name: "180 Diamonds", diamonds: 180, price: 160 },
+    { id: "p270", name: "270 Diamonds", diamonds: 270, price: 250 },
+    { id: "p449", name: "449 Diamonds", diamonds: 449, price: 400 }
+  ];
+  var adminKey = ""; // typed in the Admin panel each session, never stored
+
+  function shopApi(params, body) {
+    if (!SHOP_API_URL) return Promise.reject(new Error("Shop backend not connected"));
+    if (body) {
+      return fetch(SHOP_API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) })
+        .then(function (r) { return r.json(); });
+    }
+    var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); }).join("&");
+    return fetch(SHOP_API_URL + "?" + qs).then(function (r) { return r.json(); });
+  }
+  function pkgById(id) { for (var i = 0; i < PACKAGES.length; i++) if (PACKAGES[i].id === id) return PACKAGES[i]; return null; }
+
+  function renderShop() {
+    syncDiamondDisplays();
+    $("shop-user-input").value = store.shopUser;
+    $("shop-backend-note").hidden = !!SHOP_API_URL;
+    $("shop-packs").innerHTML = PACKAGES.map(function (p) {
+      return '<div class="pack-card"><div class="pack-diamonds">💎 ' + p.diamonds + "</div>" +
+        '<div class="pack-name">' + esc(p.name) + "</div>" +
+        '<div class="pack-price">৳' + p.price + "</div>" +
+        '<button class="btn-play" data-buy="' + p.id + '">Buy</button></div>';
+    }).join("");
+    renderMyOrders();
+  }
+  function renderMyOrders() {
+    var el = $("shop-orders");
+    var list = store.shopOrders;
+    if (!list.length) { el.innerHTML = '<p class="dim sm">No orders from this device yet.</p>'; return; }
+    el.innerHTML = list.map(function (o) {
+      return '<div class="mini-item"><span>💎 ' + o.diamonds + " — ৳" + o.amount + "</span><small>" + esc(o.id) + " · " + esc(o.status) + "</small></div>";
+    }).join("");
+  }
+
+  var checkoutPkg = null;
+  function openCheckout(id) {
+    checkoutPkg = pkgById(id); if (!checkoutPkg) return;
+    if (!SHOP_API_URL) { toast("Shop backend not connected yet"); return; }
+    $("sh-pack-name").textContent = checkoutPkg.name;
+    $("sh-pack-price").textContent = "৳" + checkoutPkg.price;
+    $("sh-username").value = store.shopUser;
+    $("sh-step1").hidden = false; $("sh-step2").hidden = true; $("sh-done").hidden = true;
+    openModal("shop-modal");
+  }
+  $("shop-packs").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-buy]") : null;
+    if (b) openCheckout(b.getAttribute("data-buy"));
+  });
+  $("sh-continue").addEventListener("click", function () {
+    var u = $("sh-username").value.trim();
+    if (u.length < 2) { toast("Enter a username (min 2 characters)"); return; }
+    store.shopUser = u;
+    $("sh-pack-name2").textContent = checkoutPkg.name;
+    $("sh-amount").textContent = "৳" + checkoutPkg.price;
+    $("sh-bkash-num").textContent = BKASH_NUMBER;
+    $("sh-trxid").value = "";
+    $("sh-step1").hidden = true; $("sh-step2").hidden = false;
+  });
+  $("sh-back").addEventListener("click", function () {
+    $("sh-step1").hidden = false; $("sh-step2").hidden = true;
+  });
+  $("sh-place").addEventListener("click", function () {
+    var u = $("sh-username").value.trim();
+    var trx = $("sh-trxid").value.trim().toUpperCase();
+    if (u.length < 2) { toast("Enter a username"); return; }
+    if (!/^[A-Z0-9]{6,24}$/.test(trx)) { toast("Enter a valid TrxID (6+ letters/numbers)"); return; }
+    var btn = $("sh-place"); btn.disabled = true; btn.textContent = "Placing…";
+    shopApi(null, { username: u, pkg: checkoutPkg.id, trxid: trx }).then(function (res) {
+      btn.disabled = false; btn.textContent = "Place Order";
+      if (!res.ok) { toast(res.error || "Order failed, try again"); return; }
+      var orders = store.shopOrders;
+      orders.unshift({ id: res.orderId, username: u, pkg: checkoutPkg.id, diamonds: checkoutPkg.diamonds, amount: checkoutPkg.price, status: "pending", ts: Date.now() });
+      store.shopOrders = orders;
+      $("sh-order-id").textContent = res.orderId;
+      $("sh-done-user").textContent = u;
+      $("sh-step2").hidden = true; $("sh-done").hidden = false;
+      renderMyOrders();
+    }).catch(function () {
+      btn.disabled = false; btn.textContent = "Place Order";
+      toast("Could not reach the shop backend. Try again.");
+    });
+  });
+  $("shop-claim").addEventListener("click", function () {
+    var u = $("shop-user-input").value.trim();
+    if (!registerAccount(u)) return;
+    if (!SHOP_API_URL) { toast("Account ready! Shop backend not connected yet."); return; }
+    var btn = $("shop-claim"); btn.disabled = true; btn.textContent = "Checking…";
+    shopApi({ action: "status", username: u }).then(function (res) {
+      btn.disabled = false; btn.textContent = "Create Account / Claim";
+      if (!res.ok) { toast("Could not check orders"); return; }
+      var claimed = store.claimed, gained = 0, fresh = [];
+      (res.fulfilled || []).forEach(function (f) {
+        if (claimed.indexOf(f.id) === -1) { gained += f.diamonds; claimed.push(f.id); fresh.push(f); }
+      });
+      store.claimed = claimed;
+      if (gained > 0) {
+        store.diamonds = store.diamonds + gained;
+        toast("+" + gained + " diamonds added!");
+        var orders = store.shopOrders.map(function (o) {
+          if (fresh.some(function (f) { return f.id === o.id; })) o.status = "complete";
+          return o;
+        });
+        store.shopOrders = orders;
+      } else toast("No new diamonds to claim yet.");
+      renderShop();
+    }).catch(function () {
+      btn.disabled = false; btn.textContent = "Create Account / Claim";
+      toast("Could not reach the shop backend. Try again.");
+    });
+  });
+
+  /* shop admin (Settings) */
+  $("admin-load").addEventListener("click", function () {
+    adminKey = $("admin-key").value;
+    if (!adminKey) { toast("Enter the admin key"); return; }
+    if (!SHOP_API_URL) { toast("Shop backend not connected yet"); return; }
+    var btn = $("admin-load"); btn.disabled = true; btn.textContent = "Loading…";
+    shopApi({ action: "list", key: adminKey }).then(function (res) {
+      btn.disabled = false; btn.textContent = "Load Orders";
+      if (!res.ok) { toast(res.error === "unauthorized" ? "Wrong admin key" : "Could not load orders"); return; }
+      renderAdminOrders(res.orders || []);
+    }).catch(function () {
+      btn.disabled = false; btn.textContent = "Load Orders";
+      toast("Could not reach the shop backend. Try again.");
+    });
+  });
+  function renderAdminOrders(orders) {
+    var el = $("admin-orders");
+    if (!orders.length) { el.innerHTML = '<p class="dim sm">No orders yet.</p>'; return; }
+    el.innerHTML = orders.map(function (o) {
+      var when = o.time ? new Date(o.time).toLocaleString() : "";
+      return '<div class="admin-row"><div><strong>' + esc(o.username) + "</strong> — 💎 " + o.diamonds + " · ৳" + o.amount +
+        '<br><small class="dim">' + esc(o.trxid) + " · " + esc(when) + " · " + esc(o.id) + "</small></div>" +
+        '<span class="pill ' + (o.status === "complete" ? "done" : "pend") + '">' + esc(o.status) + "</span>" +
+        (o.status === "pending" ? '<button class="btn-play sm" data-complete="' + esc(o.id) + '" data-amt="' + o.amount + '" data-trx="' + esc(o.trxid) + '">Complete</button>' : "") +
+        "</div>";
+    }).join("");
+  }
+  $("admin-orders").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-complete]") : null;
+    if (!b) return;
+    var id = b.getAttribute("data-complete");
+    askConfirm("Mark order Complete?", "Only continue if you verified ৳" + b.getAttribute("data-amt") + " / TrxID " + b.getAttribute("data-trx") + " in your bKash app.", "Mark Complete", function () {
+      shopApi(null, { action: "complete", id: id, key: adminKey }).then(function (res) {
+        if (!res.ok) { toast(res.error || "Could not complete"); return; }
+        toast("Order completed — diamonds will be claimable.");
+        $("admin-load").click();
+      }).catch(function () { toast("Could not reach the shop backend."); });
+    });
+  });
+
   /* ---------------- avatar menu ---------------- */
   var avatarMenu = $("avatar-menu"), avatarBtn = $("avatar-btn");
   function closeAvatarMenu() { avatarMenu.hidden = true; avatarBtn.setAttribute("aria-expanded", "false"); }
@@ -408,6 +670,7 @@
   applyAccent(store.accent);
   syncToggles();
   window.addEventListener("resize", syncToggles);
+  syncDiamondDisplays(); syncFeatured();
   renderHome(); renderLibrary(); renderCategories(); renderFavorites(); renderRecent(); renderProfile();
   setView("home");
 })();
