@@ -60,7 +60,7 @@ var BEST_KEY = "policeChaseBest";
 var canvas = document.getElementById("game");
 var ctx = canvas.getContext("2d");
 var W = 0, H = 0, DPR = 1;
-var roadX = 0, roadW = 0, laneW = 0, playerY = 0, carScale = 1;
+var roadX = 0, roadW = 0, laneW = 0, playerY = 0, pyT = 0, carScale = 1;
 
 function layout() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -74,6 +74,8 @@ function layout() {
   // keep the player's vertical position across resizes; set default on first layout
   if (!playerY) playerY = H * 0.78;
   playerY = clamp(playerY, H * 0.30, H * 0.86);
+  if (!pyT) pyT = playerY;
+  pyT = clamp(pyT, H * 0.30, H * 0.86);
   carScale = clamp(Math.min(W, H) / 700, 0.72, 1.15);
 }
 function laneX(i) { return roadX + laneW * (i + 0.5); }
@@ -109,6 +111,7 @@ function resetGame() {
   lane = 2; lives = 3; score = 0; distM = 0;
   speedKmh = 70; elapsed = 0;
   playerY = H * 0.78;
+  pyT = playerY;
   traffic = []; police = []; pickups = []; parts = []; popups = []; bombs = [];
   spawnT = 1.2; pickupT = 8; policeT = 20; lastLane = -1;
   iframes = 0; shieldT = 0; phaseT = 0; nitroT = 0;
@@ -392,6 +395,8 @@ function update(dt) {
   var dx = tx - px;
   px += dx * Math.min(1, dt * 10);
   tilt += ((dx > 4 ? 0.16 : dx < -4 ? -0.16 : 0) - tilt) * Math.min(1, dt * 8);
+  // player vertical smoothing — same glide as lane switching (no stepped lag)
+  playerY += (pyT - playerY) * Math.min(1, dt * 10);
 
   // traffic spawning — denser over time
   spawnT -= dt;
@@ -688,9 +693,47 @@ function drawCar(x, y, w, h, body, opts) {
 }
 
 var PICKUP_STYLE = {
-  nitro: { c: "#fb923c", t: "N" }, shield: { c: "#60a5fa", t: "S" },
-  phase: { c: "#22d3ee", t: "P" }, repair: { c: "#4ade80", t: "+" }
+  nitro: { c: "#fb923c" }, shield: { c: "#60a5fa" },
+  phase: { c: "#22d3ee" }, repair: { c: "#4ade80" }
 };
+/* pictorial pickup icons — recognizable at a glance, drawn in the pickup color */
+function drawPickupIcon(type, s) {
+  if (type === "nitro") {           // rocket cylinder (NOS tank) + flame
+    ctx.beginPath();
+    ctx.moveTo(-4 * s, 6 * s); ctx.lineTo(-4 * s, -3 * s);
+    ctx.quadraticCurveTo(-4 * s, -8 * s, 0, -8 * s);
+    ctx.quadraticCurveTo(4 * s, -8 * s, 4 * s, -3 * s);
+    ctx.lineTo(4 * s, 6 * s); ctx.closePath(); ctx.fill();
+    ctx.beginPath();                // fins
+    ctx.moveTo(-4 * s, 2 * s); ctx.lineTo(-7 * s, 7 * s); ctx.lineTo(-4 * s, 7 * s); ctx.closePath(); ctx.fill();
+    ctx.moveTo(4 * s, 2 * s); ctx.lineTo(7 * s, 7 * s); ctx.lineTo(4 * s, 7 * s); ctx.closePath(); ctx.fill();
+    ctx.beginPath();                // flame
+    ctx.moveTo(-2.5 * s, 7 * s); ctx.lineTo(0, 12 * s); ctx.lineTo(2.5 * s, 7 * s); ctx.closePath(); ctx.fill();
+  } else if (type === "shield") {   // shield
+    ctx.beginPath();
+    ctx.moveTo(0, -9 * s); ctx.lineTo(8 * s, -6 * s);
+    ctx.quadraticCurveTo(8 * s, 4 * s, 0, 9 * s);
+    ctx.quadraticCurveTo(-8 * s, 4 * s, -8 * s, -6 * s);
+    ctx.closePath(); ctx.fill();
+  } else if (type === "phase") {    // ghost (invisibility)
+    ctx.beginPath();
+    ctx.arc(0, -1 * s, 8 * s, Math.PI, 0);
+    ctx.lineTo(8 * s, 7 * s);
+    ctx.quadraticCurveTo(5.3 * s, 3.5 * s, 2.7 * s, 7 * s);
+    ctx.quadraticCurveTo(0, 3.5 * s, -2.7 * s, 7 * s);
+    ctx.quadraticCurveTo(-5.3 * s, 3.5 * s, -8 * s, 7 * s);
+    ctx.lineTo(-8 * s, -1 * s); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#0b0b18";      // eyes
+    ctx.beginPath(); ctx.arc(-3 * s, -1 * s, 1.6 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(3 * s, -1 * s, 1.6 * s, 0, Math.PI * 2); ctx.fill();
+  } else {                          // repair: heart (health)
+    ctx.beginPath();
+    ctx.moveTo(0, 8 * s);
+    ctx.bezierCurveTo(-13 * s, -1 * s, -7 * s, -10 * s, 0, -4 * s);
+    ctx.bezierCurveTo(7 * s, -10 * s, 13 * s, -1 * s, 0, 8 * s);
+    ctx.closePath(); ctx.fill();
+  }
+}
 function drawPickup(p) {
   var st = PICKUP_STYLE[p.type];
   var bobY = Math.sin(p.bob) * 4, r = 17 * carScale;
@@ -698,9 +741,8 @@ function drawPickup(p) {
   ctx.strokeStyle = st.c; ctx.lineWidth = 3;
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = st.c; ctx.font = "bold " + Math.round(18 * carScale) + "px monospace";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(st.t, 0, 1);
+  ctx.fillStyle = st.c;
+  drawPickupIcon(p.type, carScale);
   ctx.restore();
 }
 
@@ -862,11 +904,11 @@ function moveRight() {
 }
 function moveForward() {   // up the screen = forward (hold to keep going)
   if (state !== "playing" || arresting) return;
-  playerY = clamp(playerY - H * 0.07, H * 0.30, H * 0.86);
+  pyT = clamp(pyT - H * 0.07, H * 0.30, H * 0.86);
 }
 function moveBack() {      // down the screen = backward (hold to keep going)
   if (state !== "playing" || arresting) return;
-  playerY = clamp(playerY + H * 0.07, H * 0.30, H * 0.86);
+  pyT = clamp(pyT + H * 0.07, H * 0.30, H * 0.86);
 }
 
 document.addEventListener("keydown", function (e) {
