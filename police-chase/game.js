@@ -439,6 +439,26 @@ function update(dt) {
     }
   }
 
+  // fairness: NPC cars/trucks also crash into road barriers
+  // (barriers used to hurt only the player while NPC traffic drove through them untouched)
+  for (var bi = traffic.length - 1; bi >= 0; bi--) {
+    var bar = traffic[bi];
+    if (bar.kind !== "barrier") continue;
+    for (var ci = traffic.length - 1; ci >= 0; ci--) {
+      var veh = traffic[ci];
+      if (veh.kind === "barrier") continue;
+      if (overlap(bar.x, bar.y, bar.w * carScale, bar.h * carScale, veh.x, veh.y, veh.w * carScale, veh.h * carScale)) {
+        burst(veh.x, veh.y, "#fbbf24", 16, 200);
+        burst(veh.x, veh.y, "#ef4444", 10, 160);
+        popup(veh.x, veh.y - 50, "CRASH!", "#fbbf24");
+        AudioSys.thud();
+        traffic.splice(ci, 1);
+        if (ci < bi) bi--;
+        break;
+      }
+    }
+  }
+
   // police motion: faster than player => climbs the screen toward the player
   var surgeMul = surgeT > 0 ? 1.45 : 1;
   var nearest = 1e9;
@@ -908,6 +928,7 @@ window.__t = {
   get hasHeli() { return !!heli; },
   get bombsN() { return bombs.length; },
   get trafficN() { return traffic.length; },
+  get trafficKinds() { return traffic.map(function (t) { return t.kind; }); },
   get policeN() { return police.length; },
   get nitroT() { return nitroT; },
   get shieldT() { return shieldT; },
