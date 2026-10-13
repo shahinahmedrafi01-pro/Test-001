@@ -26,6 +26,7 @@
       <button class="nav-item" data-view="categories"><span class="ni">◫</span><span class="nl">Categories</span></button>
       <button class="nav-item" data-view="favorites"><span class="ni">★</span><span class="nl">Favorites</span><span class="nbadge" id="fav-count" hidden></span></button>
       <button class="nav-item" data-view="recent"><span class="ni">◷</span><span class="nl">Recently Played</span></button>
+      <button class="nav-item" data-view="shop"><span class="ni">💎</span><span class="nl">Diamond Shop</span></button>
     </nav>
     <div class="side-foot">
       <button class="nav-item" data-view="profile"><span class="ni">◯</span><span class="nl">Profile</span></button>
@@ -47,12 +48,14 @@
         <input id="search" type="search" placeholder="Search games…" autocomplete="off" aria-label="Search games">
       </div>
       <div class="top-actions">
+        <button id="topbar-diamonds" class="diamond-pill" aria-label="Open Diamond Shop">💎 <span id="topbar-diamonds-n">0</span></button>
         <button id="avatar-btn" class="avatar-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">
           <span id="avatar-initial">P</span>
         </button>
         <div id="avatar-menu" class="menu" role="menu" hidden>
           <div class="menu-head"><strong id="menu-username">Player</strong><small>GitHub Games</small></div>
           <button role="menuitem" data-goto="profile">◯&nbsp; Profile</button>
+          <button role="menuitem" data-goto="shop">💎&nbsp; Diamond Shop</button>
           <button role="menuitem" data-goto="settings">⚙&nbsp; Settings</button>
           <button role="menuitem" id="menu-about">ⓘ&nbsp; About</button>
         </div>
@@ -132,6 +135,25 @@
         </div>
       </section>
 
+      <!-- DIAMOND SHOP -->
+      <section class="view" id="view-shop" aria-label="Diamond Shop">
+        <div class="sec-head"><h3>💎 Diamond Shop</h3></div>
+        <div class="panel shop-panel">
+          <div class="shop-balance-row">
+            <div><span class="dim sm">Your Diamonds&nbsp;</span><strong id="shop-balance">0</strong> 💎</div>
+            <div class="shop-user-row">
+              <input id="shop-user-input" maxlength="24" placeholder="Your username" aria-label="Your username">
+              <button class="btn-play sm" id="shop-claim">Create Account / Claim</button>
+            </div>
+          </div>
+          <p class="dim sm" id="shop-backend-note" hidden>Shop backend not connected yet — orders are unavailable.</p>
+          <div id="shop-packs" class="shop-packs"></div>
+          <h4>My Orders</h4>
+          <div id="shop-orders" class="mini-list"></div>
+          <p class="dim sm">Pay with bKash Send Money, then enter your TrxID. Orders stay Pending until the payment is verified.</p>
+        </div>
+      </section>
+
       <!-- PROFILE -->
       <section class="view" id="view-profile" aria-label="Profile">
         <div class="sec-head"><h3>Profile</h3></div>
@@ -202,6 +224,15 @@
             <div class="set-row"><span>Clear favorites</span><button class="btn-ghost sm danger" id="btn-clear-favs">Clear</button></div>
           </div>
           <div class="set-group">
+            <h4>Shop Admin</h4>
+            <p class="dim sm">View diamond orders and mark them Complete after verifying the payment in your bKash app.</p>
+            <div class="set-row"><span>Admin key</span>
+              <input id="admin-key" type="password" placeholder="Admin key" aria-label="Admin key" autocomplete="off">
+            </div>
+            <div class="set-row"><span>Orders</span><button class="btn-play sm" id="admin-load">Load Orders</button></div>
+            <div id="admin-orders" class="admin-orders"></div>
+          </div>
+          <div class="set-group">
             <h4>About</h4>
             <p><strong>GitHub Games</strong> — Discover. Play. Repeat.</p>
             <p class="dim">This is made for everyone.</p>
@@ -239,6 +270,71 @@
     <p><strong>GitHub Games</strong> — Discover. Play. Repeat.</p>
     <p class="dim">This is made for everyone.</p>
     <p class="dim sm">A personal browser gaming platform. Your favorites, recent games and settings live only in this browser.</p>
+  </div>
+</div>
+
+<!-- shop checkout modal -->
+<div id="shop-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="sh-title">
+  <div class="modal-card narrow">
+    <button class="icon-btn modal-x" data-close aria-label="Close">✕</button>
+    <h3 id="sh-title">Buy Diamonds</h3>
+    <div id="sh-step1">
+      <p><strong id="sh-pack-name"></strong> — <span id="sh-pack-price"></span></p>
+      <label class="dim sm" for="sh-username">Your username (diamonds go to this name)</label>
+      <input id="sh-username" maxlength="24" placeholder="Username" aria-label="Username">
+      <div class="im-actions">
+        <button class="btn-ghost" data-close>Cancel</button>
+        <button class="btn-play" id="sh-continue">Continue</button>
+      </div>
+    </div>
+    <div id="sh-step2" hidden>
+      <p><strong id="sh-pack-name2"></strong></p>
+      <div class="bkash-box">
+        <p>Send <strong id="sh-amount"></strong> via bKash <strong>Send Money</strong> to:</p>
+        <p class="bkash-num" id="sh-bkash-num"></p>
+        <p class="dim sm">Send the exact amount from your bKash account, then enter the TrxID below.</p>
+      </div>
+      <label class="dim sm" for="sh-trxid">bKash Transaction ID (TrxID)</label>
+      <input id="sh-trxid" maxlength="24" placeholder="e.g. 9H8K2J4F1X" aria-label="Transaction ID">
+      <div class="im-actions">
+        <button class="btn-ghost" id="sh-back">Back</button>
+        <button class="btn-play" id="sh-place">Place Order</button>
+      </div>
+    </div>
+    <div id="sh-done" hidden>
+      <p>✅ <strong>Order placed!</strong></p>
+      <p class="dim">Order <strong id="sh-order-id"></strong> is <strong>Pending</strong>. Diamonds will be added to <strong id="sh-done-user"></strong> very soon, once payment verification is complete.</p>
+      <div class="im-actions">
+        <button class="btn-play" data-close>Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- floating shop button -->
+<button id="shop-fab" aria-label="Open Diamond Shop">💎 Shop</button>
+
+<!-- buy game modal -->
+<div id="buy-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="buy-title">
+  <div class="modal-card narrow">
+    <button class="icon-btn modal-x" data-close aria-label="Close">✕</button>
+    <h3 id="buy-title">Unlock Police Chase</h3>
+    <p class="dim sm">One-time purchase — buy once, play forever.</p>
+    <p><strong>Price: 30 💎</strong> · Your balance: <strong id="buy-balance">0</strong> 💎</p>
+    <div id="buy-username-row">
+      <label class="dim sm" for="buy-username">Create your account to get 30 free diamonds</label>
+      <input id="buy-username" maxlength="24" placeholder="Choose a username" aria-label="Username">
+      <div class="im-actions">
+        <button class="btn-play sm" id="buy-create">Create Account (+30 💎)</button>
+      </div>
+    </div>
+    <p class="dim sm" id="buy-account-note" hidden>Account: <strong id="buy-account-name"></strong></p>
+    <p class="dim sm" id="buy-need-note" hidden></p>
+    <div class="im-actions">
+      <button class="btn-ghost" data-close>Cancel</button>
+      <button class="btn-play" id="buy-confirm">Buy for 30 💎</button>
+      <button class="btn-play" id="buy-shop" hidden>Go to Diamond Shop</button>
+    </div>
   </div>
 </div>
 

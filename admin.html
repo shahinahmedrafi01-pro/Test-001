@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diamond Shop — Admin</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #0b0e14; color: #e5e7eb; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid #1f2937; }
+  header h1 { font-size: 20px; margin: 0; }
+  header a { color: #22d3ee; text-decoration: none; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px; }
+  .dim { color: #9ca3af; }
+  .sm { font-size: 13px; }
+  .warn { background: #422006; border: 1px solid #92400e; border-radius: 10px; padding: 12px 14px; margin: 0 0 16px; }
+  .key-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  input[type=password] { background: #111827; border: 1px solid #374151; color: inherit; border-radius: 8px; padding: 10px 12px; font-size: 14px; flex: 1; min-width: 180px; }
+  button { border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: #22d3ee; color: #06202a; }
+  .btn-complete { background: #22c55e; color: #06280f; padding: 7px 12px; }
+  .btn-cancel { background: #ef4444; color: #fff; padding: 7px 12px; }
+  button:disabled { opacity: .6; }
+  .admin-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-top: 1px solid #1f2937; padding: 12px 0; flex-wrap: wrap; }
+  .pill { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; }
+  .pill.pending { background: #422006; color: #fbbf24; }
+  .pill.complete { background: #052e16; color: #4ade80; }
+  .pill.cancelled { background: #3f1d1d; color: #f87171; }
+  .row-actions { display: flex; gap: 8px; }
+  #status { min-height: 20px; margin: 0 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💎 Diamond Shop — Admin</h1>
+  <a href="./">← Back to GitHub Games</a>
+</header>
+<main>
+  <p class="warn">⚠️ Before pressing <strong>Complete</strong>, always verify the amount + TrxID in your <strong>bKash app</strong>. Fake TrxIDs are possible. <strong>Cancel</strong> means the buyer will NOT get diamonds.</p>
+  <div class="key-row">
+    <input id="admin-key" type="password" placeholder="Admin key" autocomplete="off" aria-label="Admin key">
+    <button class="btn-primary" id="admin-load">Load Orders</button>
+  </div>
+  <p id="status" class="dim sm"></p>
+  <p id="backend-note" class="dim sm" hidden>Shop backend not connected yet — no orders can load.</p>
+  <div id="admin-orders"></div>
+</main>
+<script>
+"use strict";
+/* Admin dashboard for the Diamond Shop. Same backend as the hub:
+   set SHOP_API_URL to the deployed Apps Script Web app URL (ends with /exec).
+   The ADMIN_KEY is typed here each time and never stored. */
+var SHOP_API_URL = "";
+var adminKey = "";
+
+function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+function api(params, body) {
+  if (!SHOP_API_URL) return Promise.reject(new Error("Shop backend not connected"));
+  if (body) {
+    return fetch(SHOP_API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); });
+  }
+  var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); }).join("&");
+  return fetch(SHOP_API_URL + "?" + qs).then(function (r) { return r.json(); });
+}
+function render(orders) {
+  var el = document.getElementById("admin-orders");
+  if (!orders.length) { el.innerHTML = '<p class="dim">No orders yet.</p>'; return; }
+  orders.sort(function (a, b) {
+    var rank = { pending: 0, complete: 1, cancelled: 2 };
+    var ra = rank[a.status] == null ? 3 : rank[a.status], rb = rank[b.status] == null ? 3 : rank[b.status];
+    return ra - rb || String(b.time || "").localeCompare(String(a.time || ""));
+  });
+  el.innerHTML = orders.map(function (o) {
+    var when = o.time ? new Date(o.time).toLocaleString() : "";
+    var btns = o.status === "pending"
+      ? '<div class="row-actions"><button class="btn-complete" data-complete="' + esc(o.id) + '" data-amt="' + o.amount + '" data-trx="' + esc(o.trxid) + '">Complete</button>' +
+        '<button class="btn-cancel" data-cancel="' + esc(o.id) + '">Cancel</button></div>'
+      : "";
+    return '<div class="admin-row"><div><strong>' + esc(o.username) + "</strong> — 💎 " + o.diamonds + " · ৳" + o.amount +
+      '<br><span class="dim sm">' + esc(o.trxid) + " · " + esc(when) + " · " + esc(o.id) + "</span></div>" +
+      '<span class="pill ' + esc(o.status) + '">' + esc(o.status) + "</span>" + btns + "</div>";
+  }).join("");
+}
+function loadOrders(silent) {
+  if (!adminKey) { if (!silent) document.getElementById("status").textContent = "Enter the admin key."; return; }
+  if (!SHOP_API_URL) { document.getElementById("status").textContent = "Shop backend not connected yet."; return; }
+  var btn = document.getElementById("admin-load");
+  btn.disabled = true; btn.textContent = "Loading…";
+  api({ action: "list", key: adminKey }).then(function (res) {
+    btn.disabled = false; btn.textContent = "Load Orders";
+    if (!res.ok) {
+      document.getElementById("status").textContent = res.error === "unauthorized" ? "Wrong admin key." : "Could not load orders.";
+      return;
+    }
+    document.getElementById("status").textContent = "Showing " + (res.orders || []).length + " order(s). Auto-refresh every 30s.";
+    render(res.orders || []);
+  }).catch(function () {
+    btn.disabled = false; btn.textContent = "Load Orders";
+    document.getElementById("status").textContent = "Could not reach the shop backend. Try again.";
+  });
+}
+document.getElementById("admin-load").addEventListener("click", function () {
+  adminKey = document.getElementById("admin-key").value;
+  loadOrders(false);
+});
+document.getElementById("admin-orders").addEventListener("click", function (e) {
+  var comp = e.target.closest ? e.target.closest("[data-complete]") : null;
+  var canc = e.target.closest ? e.target.closest("[data-cancel]") : null;
+  if (comp) {
+    var id = comp.getAttribute("data-complete");
+    if (!confirm("Mark order Complete?\nOnly continue if you verified ৳" + comp.getAttribute("data-amt") + " / TrxID " + comp.getAttribute("data-trx") + " in your bKash app.")) return;
+    api(null, { action: "complete", id: id, key: adminKey }).then(function (res) {
+      if (!res.ok) { document.getElementById("status").textContent = res.error || "Could not complete."; return; }
+      document.getElementById("status").textContent = "Order completed — diamonds are now claimable.";
+      loadOrders(true);
+    }).catch(function () { document.getElementById("status").textContent = "Could not reach the shop backend."; });
+  } else if (canc) {
+    var cid = canc.getAttribute("data-cancel");
+    if (!confirm("Cancel this order?\nThe buyer will NOT get any diamonds. This cannot be undone.")) return;
+    api(null, { action: "cancel", id: cid, key: adminKey }).then(function (res) {
+      if (!res.ok) { document.getElementById("status").textContent = res.error || "Could not cancel."; return; }
+      document.getElementById("status").textContent = "Order cancelled.";
+      loadOrders(true);
+    }).catch(function () { document.getElementById("status").textContent = "Could not reach the shop backend."; });
+  }
+});
+setInterval(function () { if (adminKey && SHOP_API_URL) loadOrders(true); }, 30000);
+document.getElementById("backend-note").hidden = !!SHOP_API_URL;
+</script>
+</body>
+</html>

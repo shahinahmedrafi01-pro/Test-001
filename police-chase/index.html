@@ -101,7 +101,31 @@
       <button id="btn-over-menu" class="big">‹ ARCADE MENU</button>
     </div>
   </div>
+
+  <div id="lock" class="overlay hidden">
+    <h1 class="title">POLICE<span>CHASE</span></h1>
+    <p class="subtitle">This game costs 30 💎 to unlock — buy once, play forever.</p>
+    <p class="subtitle">New account? You get 30 free diamonds when you create one.</p>
+    <div class="menu-btns">
+      <button class="big primary" onclick="window.location.href='../'">💎 Buy on the Hub</button>
+    </div>
+  </div>
 </div>
-<script src="game.js"></script>
+<script>
+/* Ownership gate: the game only loads if this device owns it (bought on the hub for 30 diamonds).
+   Not owned -> the lock screen shows and game.js never loads, so the game cannot start. */
+(function () {
+  var owned = false;
+  try { owned = JSON.parse(localStorage.getItem("gg_owned") || "[]").indexOf("police-chase") !== -1; } catch (e) {}
+  if (owned) {
+    var s = document.createElement("script");
+    s.src = "game.js";
+    document.body.appendChild(s);
+  } else {
+    document.getElementById("lock").classList.remove("hidden");
+    document.getElementById("menu").classList.add("hidden");
+  }
+})();
+</script>
 </body>
 </html>
