@@ -54,6 +54,7 @@ PK.Entities = (function () {
       r: 9
     };
     p.xpNext = xpNext(1);
+    p.inv = PK.Systems.Inv.create();
     recompute(p);
     p.hp = p.maxhp; p.mp = p.maxmp; p.stamina = p.maxstamina;
     return p;

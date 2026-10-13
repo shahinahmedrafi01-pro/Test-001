@@ -464,6 +464,7 @@ PK.World = (function () {
 
   function serialize() {
     return {
+      seed: seed,
       openedChests: Object.keys(openedChests),
       harvested: harvested,
       waystones: waystones.filter(function (w) { return w.unlocked; }).map(function (w) { return w.id; })

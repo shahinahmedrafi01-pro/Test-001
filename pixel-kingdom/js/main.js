@@ -321,7 +321,7 @@ PK.Game = (function () {
   function updateCamera(dt) {
     var p = PK.Entities.player;
     if (!p) return;
-    var tx = p.x - vw / 2, ty = p.y - vh / 2;
+    var tx = p.x - vw / (2 * Z), ty = p.y - vh / (2 * Z);
     var k = 1 - Math.pow(0.001, dt);
     cam.x += (tx - cam.x) * k;
     cam.y += (ty - cam.y) * k;
