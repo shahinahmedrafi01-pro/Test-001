@@ -71,7 +71,7 @@
   ];
   var TUTORIAL = [
     "<p><strong>Welcome, Pilot!</strong> Your ship is at the bottom of the screen. Move with <strong>WASD / Arrow keys</strong> or the left joystick on touch.</p><p>Destroy enemies to earn score and credits.</p>",
-    "<p><strong>Shooting:</strong> Hold <strong>Space</strong> or the FIRE button. Turn on <strong>Auto-fire</strong> in Settings to shoot automatically.</p><p>Different weapons and upgrades are available in the Hangar and Lab.</p>",
+    "<p><strong>Shooting:</strong> Your ship fires automatically (<strong>Auto-fire</strong> is on by default). Hold <strong>Space</strong> to shoot if you turn Auto-fire off in Settings.</p><p>Different weapons and upgrades are available in the Hangar and Lab.</p>",
     "<p><strong>Stay alive:</strong> Dodge red enemy bullets. Your <strong>shield</strong> absorbs damage first. You have <strong>3 lives</strong> per run.</p><p>Grab falling power-ups for Rapid Fire, Damage ×2, Repair, Shield and Speed.</p>",
     "<p><strong>Abilities:</strong> Press <strong>1 / 2 / 3</strong> — EMP stuns, Nova Bomb nukes the screen, Time Dilation slows enemies.</p><p>Beat bosses for +500 credits. Good luck, Defender!</p>"
   ];
@@ -140,11 +140,33 @@
   /* ================= dom helpers ================= */
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  /* Toasts: one copy per message, max 3 on screen, auto-fade after
+     a while, tap to dismiss. Spamming a recharging ability can no
+     longer flood the screen. */
+  function dismissToast(t) {
+    if (!t || t._gone) return; t._gone = true;
+    if (t._timer) clearTimeout(t._timer);
+    t.classList.add("toast-out");
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 300);
+  }
   function toast(msg) {
+    var box = $("toasts");
+    /* Same message already visible? Refresh its timer, don't stack. */
+    var kids = box.children;
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].textContent === msg) {
+        var old = kids[i];
+        if (old._timer) clearTimeout(old._timer);
+        old._timer = setTimeout(function () { dismissToast(old); }, 2600);
+        return;
+      }
+    }
+    while (box.children.length >= 3) dismissToast(box.children[0]);
     var t = document.createElement("div");
     t.className = "toast"; t.textContent = msg;
-    $("toasts").appendChild(t);
-    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3200);
+    t.addEventListener("click", function () { dismissToast(t); });
+    box.appendChild(t);
+    t._timer = setTimeout(function () { dismissToast(t); }, 2600);
   }
   var bannerTimer = null;
   function banner(text, warn) {
@@ -294,10 +316,6 @@
   function joyEnd(e) { if (touch.joyId === e.pointerId) { touch.joyId = null; touch.dx = 0; touch.dy = 0; knob.style.transform = ""; } }
   joy.addEventListener("pointerup", joyEnd);
   joy.addEventListener("pointercancel", joyEnd);
-  var fireBtn = $("btn-fire");
-  fireBtn.addEventListener("pointerdown", function (e) { e.preventDefault(); touch.fire = true; });
-  fireBtn.addEventListener("pointerup", function () { touch.fire = false; });
-  fireBtn.addEventListener("pointercancel", function () { touch.fire = false; });
   document.querySelectorAll(".ab").forEach(function (b) {
     b.addEventListener("click", function () { useAbility(Number(b.getAttribute("data-ab"))); });
   });
