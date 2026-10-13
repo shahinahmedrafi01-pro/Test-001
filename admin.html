@@ -16,20 +16,22 @@
   .dim { color: #9ca3af; }
   .sm { font-size: 13px; }
   .warn { background: #422006; border: 1px solid #92400e; border-radius: 10px; padding: 12px 14px; margin: 0 0 16px; }
-  .key-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-  input[type=password] { background: #111827; border: 1px solid #374151; color: inherit; border-radius: 8px; padding: 10px 12px; font-size: 14px; flex: 1; min-width: 180px; }
+  .login-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  input { background: #111827; border: 1px solid #374151; color: inherit; border-radius: 8px; padding: 10px 12px; font-size: 14px; flex: 1; min-width: 180px; }
   button { border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
   .btn-primary { background: #22d3ee; color: #06202a; }
   .btn-complete { background: #22c55e; color: #06280f; padding: 7px 12px; }
-  .btn-cancel { background: #ef4444; color: #fff; padding: 7px 12px; }
+  .btn-reject { background: #ef4444; color: #fff; padding: 7px 12px; }
+  .btn-ghost { background: #1f2937; color: #e5e7eb; }
   button:disabled { opacity: .6; }
   .admin-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-top: 1px solid #1f2937; padding: 12px 0; flex-wrap: wrap; }
   .pill { border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; }
   .pill.pending { background: #422006; color: #fbbf24; }
   .pill.complete { background: #052e16; color: #4ade80; }
-  .pill.cancelled { background: #3f1d1d; color: #f87171; }
+  .pill.rejected { background: #3f1d1d; color: #f87171; }
   .row-actions { display: flex; gap: 8px; }
   #status { min-height: 20px; margin: 0 0 12px; }
+  #logout-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -38,97 +40,139 @@
   <a href="./">← Back to GitHub Games</a>
 </header>
 <main>
-  <p class="warn">⚠️ Before pressing <strong>Complete</strong>, always verify the amount + TrxID in your <strong>bKash app</strong>. Fake TrxIDs are possible. <strong>Cancel</strong> means the buyer will NOT get diamonds.</p>
-  <div class="key-row">
-    <input id="admin-key" type="password" placeholder="Admin key" autocomplete="off" aria-label="Admin key">
-    <button class="btn-primary" id="admin-load">Load Orders</button>
+  <p class="warn">⚠️ Before pressing <strong>Complete</strong>, always verify the amount + TrxID in your <strong>bKash app</strong>. Fake TrxIDs are possible. <strong>Reject</strong> means the buyer will NOT get diamonds. Completing credits the Diamonds <strong>automatically, exactly once</strong>.</p>
+
+  <!-- Login (Supabase Auth email + password — the admin account created in the Supabase dashboard) -->
+  <div id="login-box">
+    <div class="login-row">
+      <input id="admin-email" type="email" placeholder="Admin email" autocomplete="username" aria-label="Admin email">
+      <input id="admin-pass" type="password" placeholder="Admin password" autocomplete="current-password" aria-label="Admin password">
+      <button class="btn-primary" id="admin-login">Log In</button>
+    </div>
   </div>
-  <p id="status" class="dim sm"></p>
-  <p id="backend-note" class="dim sm" hidden>Shop backend not connected yet — no orders can load.</p>
-  <div id="admin-orders"></div>
+
+  <!-- Orders (visible after login) -->
+  <div id="orders-box" hidden>
+    <div id="logout-row">
+      <span class="dim sm">Logged in as <strong id="admin-who"></strong></span>
+      <button class="btn-ghost" id="admin-logout">Log Out</button>
+    </div>
+    <p id="status" class="dim sm"></p>
+    <div id="admin-orders"></div>
+  </div>
 </main>
 <script>
 "use strict";
-/* Admin dashboard for the Diamond Shop. Same backend as the hub:
-   set SHOP_API_URL to the deployed Apps Script Web app URL (ends with /exec).
-   The ADMIN_KEY is typed here each time and never stored. */
-var SHOP_API_URL = "";
-var adminKey = "";
+/* Admin dashboard for the Diamond Shop (Supabase backend).
+   Login uses Supabase Auth (email + password). The access token
+   lives only in memory — reload the page and you log in again.
+   The publishable key below is PUBLIC by design (safe in browser
+   code). Orders are readable only by authenticated users (RLS),
+   and Complete/Reject run through atomic RPCs that only accept
+   pending orders — so an order can never be credited twice. */
+var SUPABASE_URL = "https://wbnllmrosehgdwqqwfgd.supabase.co";
+var SUPABASE_KEY = "sb_publishable_GdfRPeymhpIxb4M4bhbS6Q_mizvMA06";
+var accessToken = "";
 
 function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
-function api(params, body) {
-  if (!SHOP_API_URL) return Promise.reject(new Error("Shop backend not connected"));
-  if (body) {
-    return fetch(SHOP_API_URL, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(body) })
-      .then(function (r) { return r.json(); });
-  }
-  var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); }).join("&");
-  return fetch(SHOP_API_URL + "?" + qs).then(function (r) { return r.json(); });
+function setStatus(t) { document.getElementById("status").textContent = t; }
+function sbHeaders() {
+  return { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + (accessToken || SUPABASE_KEY), "Content-Type": "application/json" };
+}
+function rpc(fn, body) {
+  return fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, { method: "POST", headers: sbHeaders(), body: JSON.stringify(body || {}) })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, data: j }; }); });
 }
 function render(orders) {
   var el = document.getElementById("admin-orders");
   if (!orders.length) { el.innerHTML = '<p class="dim">No orders yet.</p>'; return; }
   orders.sort(function (a, b) {
-    var rank = { pending: 0, complete: 1, cancelled: 2 };
+    var rank = { pending: 0, complete: 1, rejected: 2 };
     var ra = rank[a.status] == null ? 3 : rank[a.status], rb = rank[b.status] == null ? 3 : rank[b.status];
-    return ra - rb || String(b.time || "").localeCompare(String(a.time || ""));
+    return ra - rb || String(b.created_at || "").localeCompare(String(a.created_at || ""));
   });
   el.innerHTML = orders.map(function (o) {
-    var when = o.time ? new Date(o.time).toLocaleString() : "";
+    var when = o.created_at ? new Date(o.created_at).toLocaleString() : "";
     var btns = o.status === "pending"
-      ? '<div class="row-actions"><button class="btn-complete" data-complete="' + esc(o.id) + '" data-amt="' + o.amount + '" data-trx="' + esc(o.trxid) + '">Complete</button>' +
-        '<button class="btn-cancel" data-cancel="' + esc(o.id) + '">Cancel</button></div>'
+      ? '<div class="row-actions"><button class="btn-complete" data-complete="' + esc(o.id) + '" data-amt="' + o.amount + '" data-trx="' + esc(o.trxid) + '" data-phone="' + esc(o.phone || "") + '" data-user="' + esc(o.username) + '" data-diamonds="' + o.diamonds + '">Complete</button>' +
+        '<button class="btn-reject" data-reject="' + esc(o.id) + '">Reject</button></div>'
       : "";
     return '<div class="admin-row"><div><strong>' + esc(o.username) + "</strong> — 💎 " + o.diamonds + " · ৳" + o.amount +
-      '<br><span class="dim sm">' + esc(o.trxid) + " · " + esc(when) + " · " + esc(o.id) + "</span></div>" +
+      '<br><span class="dim sm">📱 ' + esc(o.phone || "—") + " · " + esc(o.trxid) + " · " + esc(when) + " · " + esc(o.id) + "</span></div>" +
       '<span class="pill ' + esc(o.status) + '">' + esc(o.status) + "</span>" + btns + "</div>";
   }).join("");
 }
 function loadOrders(silent) {
-  if (!adminKey) { if (!silent) document.getElementById("status").textContent = "Enter the admin key."; return; }
-  if (!SHOP_API_URL) { document.getElementById("status").textContent = "Shop backend not connected yet."; return; }
-  var btn = document.getElementById("admin-load");
-  btn.disabled = true; btn.textContent = "Loading…";
-  api({ action: "list", key: adminKey }).then(function (res) {
-    btn.disabled = false; btn.textContent = "Load Orders";
-    if (!res.ok) {
-      document.getElementById("status").textContent = res.error === "unauthorized" ? "Wrong admin key." : "Could not load orders.";
-      return;
-    }
-    document.getElementById("status").textContent = "Showing " + (res.orders || []).length + " order(s). Auto-refresh every 30s.";
-    render(res.orders || []);
-  }).catch(function () {
-    btn.disabled = false; btn.textContent = "Load Orders";
-    document.getElementById("status").textContent = "Could not reach the shop backend. Try again.";
-  });
+  if (!accessToken) return;
+  if (!silent) setStatus("Loading…");
+  fetch(SUPABASE_URL + "/rest/v1/orders?select=*&order=created_at.desc", { headers: sbHeaders() })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, data: j }; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        setStatus(res.data && res.data.message ? res.data.message : "Could not load orders. Your session may have expired — log in again.");
+        return;
+      }
+      if (!silent) setStatus("Showing " + res.data.length + " order(s). Auto-refresh every 30s.");
+      render(res.data || []);
+    })
+    .catch(function () { setStatus("Could not reach the server. Try again."); });
 }
-document.getElementById("admin-load").addEventListener("click", function () {
-  adminKey = document.getElementById("admin-key").value;
-  loadOrders(false);
+document.getElementById("admin-login").addEventListener("click", function () {
+  var email = document.getElementById("admin-email").value.trim();
+  var pass = document.getElementById("admin-pass").value;
+  if (!email || !pass) { alert("Enter your admin email and password."); return; }
+  var btn = document.getElementById("admin-login"); btn.disabled = true; btn.textContent = "Logging in…";
+  fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: email, password: pass })
+  }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, data: j }; }); })
+    .then(function (res) {
+      btn.disabled = false; btn.textContent = "Log In";
+      if (!res.ok || !res.data.access_token) {
+        alert("Login failed — check your email and password.");
+        return;
+      }
+      accessToken = res.data.access_token;
+      document.getElementById("admin-pass").value = "";
+      document.getElementById("login-box").hidden = true;
+      document.getElementById("orders-box").hidden = false;
+      document.getElementById("admin-who").textContent = email;
+      loadOrders(false);
+    })
+    .catch(function () {
+      btn.disabled = false; btn.textContent = "Log In";
+      alert("Could not reach the server. Try again.");
+    });
+});
+document.getElementById("admin-logout").addEventListener("click", function () {
+  accessToken = "";
+  document.getElementById("orders-box").hidden = true;
+  document.getElementById("login-box").hidden = false;
+  document.getElementById("admin-orders").innerHTML = "";
 });
 document.getElementById("admin-orders").addEventListener("click", function (e) {
   var comp = e.target.closest ? e.target.closest("[data-complete]") : null;
-  var canc = e.target.closest ? e.target.closest("[data-cancel]") : null;
+  var rej = e.target.closest ? e.target.closest("[data-reject]") : null;
   if (comp) {
     var id = comp.getAttribute("data-complete");
-    if (!confirm("Mark order Complete?\nOnly continue if you verified ৳" + comp.getAttribute("data-amt") + " / TrxID " + comp.getAttribute("data-trx") + " in your bKash app.")) return;
-    api(null, { action: "complete", id: id, key: adminKey }).then(function (res) {
-      if (!res.ok) { document.getElementById("status").textContent = res.error || "Could not complete."; return; }
-      document.getElementById("status").textContent = "Order completed — diamonds are now claimable.";
+    if (!confirm("Mark order Complete?\nOnly continue if you verified ৳" + comp.getAttribute("data-amt") + " / TrxID " + comp.getAttribute("data-trx") + " from " + (comp.getAttribute("data-phone") || "—") + " in your bKash app.\n\nThis will add 💎" + comp.getAttribute("data-diamonds") + " to " + comp.getAttribute("data-user") + " automatically.")) return;
+    rpc("complete_order", { p_order_id: id }).then(function (res) {
+      if (!res.ok) { setStatus(res.data && res.data.message ? res.data.message : "Could not complete."); return; }
+      setStatus("Order completed — Diamonds credited to " + comp.getAttribute("data-user") + ".");
       loadOrders(true);
-    }).catch(function () { document.getElementById("status").textContent = "Could not reach the shop backend."; });
-  } else if (canc) {
-    var cid = canc.getAttribute("data-cancel");
-    if (!confirm("Cancel this order?\nThe buyer will NOT get any diamonds. This cannot be undone.")) return;
-    api(null, { action: "cancel", id: cid, key: adminKey }).then(function (res) {
-      if (!res.ok) { document.getElementById("status").textContent = res.error || "Could not cancel."; return; }
-      document.getElementById("status").textContent = "Order cancelled.";
+    }).catch(function () { setStatus("Could not reach the server."); });
+  } else if (rej) {
+    var rid = rej.getAttribute("data-reject");
+    if (!confirm("Reject this order?\nThe buyer will NOT get any diamonds. This cannot be undone.")) return;
+    rpc("reject_order", { p_order_id: rid }).then(function (res) {
+      if (!res.ok) { setStatus(res.data && res.data.message ? res.data.message : "Could not reject."); return; }
+      setStatus("Order rejected.");
       loadOrders(true);
-    }).catch(function () { document.getElementById("status").textContent = "Could not reach the shop backend."; });
+    }).catch(function () { setStatus("Could not reach the server."); });
   }
 });
-setInterval(function () { if (adminKey && SHOP_API_URL) loadOrders(true); }, 30000);
-document.getElementById("backend-note").hidden = !!SHOP_API_URL;
+setInterval(function () { if (accessToken) loadOrders(true); }, 30000);
 </script>
 </body>
 </html>

@@ -143,14 +143,11 @@
             <div><span class="dim sm">Your Diamonds&nbsp;</span><strong id="shop-balance">0</strong> 💎</div>
             <div class="shop-user-row">
               <input id="shop-user-input" maxlength="24" placeholder="Your username" aria-label="Your username">
-              <button class="btn-play sm" id="shop-claim">Create Account / Claim</button>
+              <button class="btn-play sm" id="shop-claim">Create / Load Account</button>
             </div>
           </div>
-          <p class="dim sm" id="shop-backend-note" hidden>Shop backend not connected yet — orders are unavailable.</p>
           <div id="shop-packs" class="shop-packs"></div>
-          <h4>My Orders</h4>
-          <div id="shop-orders" class="mini-list"></div>
-          <p class="dim sm">Pay with bKash Send Money, then enter your TrxID. Orders stay Pending until the payment is verified.</p>
+          <p class="dim sm">Pay with bKash Send Money (app or *247#), then enter your TrxID + phone number. Orders stay Pending until the payment is verified — then your Diamonds are added automatically.</p>
         </div>
       </section>
 
@@ -218,25 +215,21 @@
           </div>
           <div class="set-group danger-zone">
             <h4>Data &amp; Privacy</h4>
-            <p class="dim sm">Everything is stored only in this browser.</p>
+            <p class="dim sm">Profile, favorites and best scores stay in this browser. Shop accounts, Diamonds and orders live in the secure database, so the same username works on any device.</p>
             <div class="set-row"><span>Reset best scores</span><button class="btn-ghost sm danger" id="btn-reset-scores">Reset</button></div>
             <div class="set-row"><span>Clear recently played</span><button class="btn-ghost sm danger" id="btn-clear-recent">Clear</button></div>
             <div class="set-row"><span>Clear favorites</span><button class="btn-ghost sm danger" id="btn-clear-favs">Clear</button></div>
           </div>
           <div class="set-group">
             <h4>Shop Admin</h4>
-            <p class="dim sm">View diamond orders and mark them Complete after verifying the payment in your bKash app.</p>
-            <div class="set-row"><span>Admin key</span>
-              <input id="admin-key" type="password" placeholder="Admin key" aria-label="Admin key" autocomplete="off">
-            </div>
-            <div class="set-row"><span>Orders</span><button class="btn-play sm" id="admin-load">Load Orders</button></div>
-            <div id="admin-orders" class="admin-orders"></div>
+            <p class="dim sm">View diamond orders and mark them Complete after verifying the payment in your bKash app. Admin login required.</p>
+            <div class="set-row"><span>Admin page</span><a class="btn-play sm" href="admin.html">Open Admin Page</a></div>
           </div>
           <div class="set-group">
             <h4>About</h4>
             <p><strong>GitHub Games</strong> — Discover. Play. Repeat.</p>
             <p class="dim">This is made for everyone.</p>
-            <p class="dim sm">Hub v2.0 · Games launch in their own pages and keep their own saved data.</p>
+            <p class="dim sm">Hub v3.0 · Games launch in their own pages and keep their own saved data.</p>
           </div>
         </div>
       </section>
@@ -292,10 +285,13 @@
       <div class="bkash-box">
         <p>Send <strong id="sh-amount"></strong> via bKash <strong>Send Money</strong> to:</p>
         <p class="bkash-num" id="sh-bkash-num"></p>
-        <p class="dim sm">Send the exact amount from your bKash account, then enter the TrxID below.</p>
+        <p><button class="btn-ghost sm" id="sh-copy" type="button">📋 Copy number</button></p>
+        <p class="dim sm">Send the exact amount from your bKash account (bKash app or *247#), then enter the TrxID + your phone number below.</p>
       </div>
       <label class="dim sm" for="sh-trxid">bKash Transaction ID (TrxID)</label>
       <input id="sh-trxid" maxlength="24" placeholder="e.g. 9H8K2J4F1X" aria-label="Transaction ID">
+      <label class="dim sm" for="sh-phone">Your bKash phone number (the one you sent money from)</label>
+      <input id="sh-phone" maxlength="14" placeholder="e.g. 01712345678" aria-label="Your bKash phone number" inputmode="tel">
       <div class="im-actions">
         <button class="btn-ghost" id="sh-back">Back</button>
         <button class="btn-play" id="sh-place">Place Order</button>
