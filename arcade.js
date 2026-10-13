@@ -8,7 +8,5 @@
     try { v = parseInt(localStorage.getItem(key) || "0", 10) || 0; } catch (e) {}
     el.textContent = v.toLocaleString("en-US");
   }
-  show("best-dino", "dinoHi");
-  show("best-alien", "alienDefenseBest");
   show("best-police", "policeChaseBest");
 })();
