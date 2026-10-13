@@ -152,7 +152,7 @@ window.addEventListener("resize", layout);
 /* ---------- DOM ---------- */
 function $(id) { return document.getElementById(id); }
 var el = {};
-["hud", "hud-score", "hud-best", "hud-dist", "hud-speed", "hud-lives", "hud-walls",
+["hud", "hud-score", "hud-best", "hud-dist", "hud-speed", "hud-lives", "hud-walls", "hud-ammo",
  "chase-fill", "chase-wrap", "hud-speed-num", "power-row", "touch-controls",
  "banner", "menu", "howto", "pause", "over", "over-title", "over-sub", "over-score", "over-best",
  "over-dist", "btn-pause", "btn-sound", "newbest"
@@ -170,6 +170,7 @@ var iframes = 0, shieldT = 0, phaseT = 0, nitroT = 0;
 var surgeT = 0, surgeBuild = 0;
 var chaseMeter = 0, shake = 0, roadOff = 0, sirenT = 0;
 var bullets = [], fireCD = 0, firing = false;   // shooting
+var ammo = 3, AMMO_MAX = 12, lastNoAmmo = -10;  // start with 3 bullets, carry at most 12
 var pursuitT = 0, wallHits = 0, slowT = 0, scrapeCD = 0;
 var ufo = null, ufoT = 20, heli = null, heliT = 14, bombs = [];
 var arresting = false, arrestT = 0, wobX = 0;
@@ -183,6 +184,7 @@ function resetGame() {
   pyT = playerY;
   traffic = []; police = []; pickups = []; parts = []; popups = []; bombs = [];
   bullets = []; fireCD = 0; firing = false;
+  ammo = 3; lastNoAmmo = -10;
   spawnT = 1.2; pickupT = 8; policeT = 20; lastLane = -1;
   iframes = 0; shieldT = 0; phaseT = 0; nitroT = 0;
   surgeT = 0; surgeBuild = 0; chaseMeter = 0; shake = 0; sirenT = 0;
@@ -274,12 +276,14 @@ function startArrest() {
 function spawnPickup() {
   var l = randi(0, LANES - 1);
   var r = Math.random(), type;
-  if (r < 0.30) type = "nitro";
-  else if (r < 0.55) type = "shield";
-  else if (r < 0.80) type = "phase";
-  else type = "repair";
-  // don't offer repair at full health
+  if (r < 0.25) type = "nitro";
+  else if (r < 0.45) type = "shield";
+  else if (r < 0.65) type = "phase";
+  else if (r < 0.80) type = "repair";
+  else type = "ammo";
+  // don't offer repair at full health / ammo at full ammo
   if (type === "repair" && lives >= 3) type = "nitro";
+  if (type === "ammo" && ammo >= AMMO_MAX) type = "nitro";
   pickups.push({ type: type, lane: l, x: laneX(l), y: -40, bob: Math.random() * 6 });
 }
 
@@ -333,6 +337,10 @@ function applyPickup(p) {
   else if (p.type === "shield") { shieldT = 9; banner("SHIELD!", "#60a5fa"); }
   else if (p.type === "phase") { phaseT = 5; banner("PHASE!", "#22d3ee"); }
   else if (p.type === "repair") { lives = Math.min(3, lives + 1); banner("+1 LIFE", "#4ade80"); updateLives(); }
+  else if (p.type === "ammo") {
+    if (ammo < AMMO_MAX) { ammo++; banner("+1 BULLET", "#facc15"); }
+    else banner("AMMO FULL", "#facc15");
+  }
   score += 50;
   burst(p.x, p.y, "#fff", 12, 140);
   AudioSys.pickup();
@@ -807,7 +815,8 @@ function drawCar(x, y, w, h, body, opts) {
 
 var PICKUP_STYLE = {
   nitro: { c: "#fb923c" }, shield: { c: "#60a5fa" },
-  phase: { c: "#22d3ee" }, repair: { c: "#4ade80" }
+  phase: { c: "#22d3ee" }, repair: { c: "#4ade80" },
+  ammo: { c: "#facc15" }
 };
 /* pictorial pickup icons — recognizable at a glance, drawn in the pickup color */
 function drawPickupIcon(type, s) {
@@ -839,6 +848,13 @@ function drawPickupIcon(type, s) {
     ctx.fillStyle = "#0b0b18";      // eyes
     ctx.beginPath(); ctx.arc(-3 * s, -1 * s, 1.6 * s, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(3 * s, -1 * s, 1.6 * s, 0, Math.PI * 2); ctx.fill();
+  } else if (type === "ammo") {   // bullet cartridge
+    ctx.fillRect(-2.5 * s, -2 * s, 5 * s, 10 * s);   // brass casing
+    ctx.beginPath();                                  // pointed tip
+    ctx.moveTo(-2.5 * s, -2 * s); ctx.lineTo(0, -9 * s); ctx.lineTo(2.5 * s, -2 * s);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#0b0b18";                        // primer dot
+    ctx.beginPath(); ctx.arc(0, 6 * s, 1.2 * s, 0, Math.PI * 2); ctx.fill();
   } else {                          // repair: heart (health)
     ctx.beginPath();
     ctx.moveTo(0, 8 * s);
@@ -957,6 +973,7 @@ function updateHUD() {
   el.hud_best.textContent = fmt(best);
   el.hud_dist.textContent = distM < 1000 ? Math.floor(distM) + " m" : (distM / 1000).toFixed(2) + " km";
   el.hud_speed_num.textContent = Math.round(speedKmh + (nitroT > 0 ? 60 : 0));
+  el.hud_ammo.textContent = "🔫 " + ammo + "/" + AMMO_MAX;
   el.chase_fill.style.width = Math.round(chaseMeter * 100) + "%";
   el.chase_wrap.classList.toggle("hot", chaseMeter > 0.7);
 }
@@ -1036,7 +1053,13 @@ function moveBack() {      // down the screen = backward (hold to keep going)
 function fireBullet() {   // sniper shot from the car's nose; 0.3s cooldown, hold to keep firing
   if (state !== "playing" || arresting) return;
   if (fireCD > 0) return;
+  if (ammo <= 0) {   // dry fire: no bullet spent, throttled warning
+    fireCD = 0.3;
+    if (elapsed - lastNoAmmo > 1.5) { lastNoAmmo = elapsed; popup(px, playerY - 80, "OUT OF AMMO!", "#f87171"); AudioSys.click(); }
+    return;
+  }
   fireCD = 0.3;
+  ammo--;
   bullets.push({ x: px, y: playerY - playerH() / 2 - 6 });
   burst(px, playerY - playerH() / 2 - 6, "#fde047", 3, 120);   // muzzle flash
   AudioSys.gunshot();
@@ -1186,6 +1209,8 @@ window.__t = {
   get trafficKinds() { return traffic.map(function (t) { return t.kind; }); },
   get policeN() { return police.length; },
   get nitroT() { return nitroT; },
+  get ammo() { return ammo; },
+  get ammoMax() { return AMMO_MAX; },
   get engineOn() { return !!AudioSys.eng; },
   get bulletsN() { return bullets.length; },
   bulletY: function () { return bullets.length ? bullets[0].y : -1; },
