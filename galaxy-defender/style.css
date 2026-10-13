@@ -112,7 +112,7 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 /* ---------- banner / toasts ---------- */
 .banner { position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%); z-index: 15; font-size: 26px; font-weight: 900; letter-spacing: 3px; text-align: center; color: #fff; text-shadow: 0 0 18px rgba(34, 211, 238, 0.9); pointer-events: none; white-space: nowrap; }
 .banner.warn { color: #fca5a5; text-shadow: 0 0 18px rgba(239, 68, 68, 0.9); }
-.toasts { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 16; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
+.toasts { position: absolute; top: auto; bottom: 12px; left: 12px; transform: none; z-index: 16; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; pointer-events: none; }
 .toast { background: rgba(10, 16, 34, 0.92); border: 1px solid #22d3ee; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 700; white-space: nowrap; animation: toast-in 0.2s ease; pointer-events: auto; cursor: pointer; transition: opacity 0.3s; }
 .toast-out { opacity: 0; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
