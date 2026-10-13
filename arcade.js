@@ -19,6 +19,22 @@
       price: 30, // one-time unlock price in diamonds (0 / absent = free)
       scoreKey: "policeChaseBest",
       scoreLabel: "Best score"
+    },
+    {
+      id: "galaxy-defender",
+      title: "Galaxy Defender",
+      genre: "Space Shooter",
+      categories: ["Action", "Shooter"],
+      tagline: "Defend the galaxy — upgrade your ship, blast the swarm, beat the bosses.",
+      description: "A futuristic space combat game. Pilot your starfighter through waves of alien enemies, collect power-ups, unleash EMP blasts, Nova Bombs and time dilation, upgrade weapons in the Lab, and take down massive bosses across Campaign, Endless, Boss Rush and Time Attack modes.",
+      controls: "WASD / arrows to move · Space to fire · 1 / 2 / 3 abilities · P pause · touch joystick + FIRE on mobile",
+      features: ["Campaign, Endless, Boss Rush & Time Attack", "3 ships, 4 weapons & upgradeable stats", "Power-ups, EMP, Nova Bomb & time dilation", "Boss fights with health bars", "Missions, achievements & local leaderboard"],
+      credits: "Original game built for this site.",
+      route: "galaxy-defender/",
+      cover: "img/cover-galaxy-defender.svg",
+      price: 30, // one-time unlock price in diamonds — same model as Police Chase
+      scoreKey: "galaxyDefenderBest",
+      scoreLabel: "Best score"
     }
   ];
   var AVATARS = [
@@ -27,7 +43,7 @@
     { id: "car", src: "img/avatars/avatar-car.svg", label: "Sports car" },
     { id: "badge", src: "img/avatars/avatar-badge.svg", label: "Police badge" }
   ];
-  var SCORE_KEYS = ["policeChaseBest", "dinoHi", "alienDefenseBest"]; // legacy keys cleared by "reset best scores"
+  var SCORE_KEYS = ["policeChaseBest", "galaxyDefenderBest", "dinoHi", "alienDefenseBest"]; // legacy keys cleared by "reset best scores"
 
   /* ---------------- storage helpers ---------------- */
   function lsGet(k, fb) {
