@@ -18,12 +18,14 @@
     homing: { name: "Homing Missiles", price: 1200, dmg: 15, rate: 3, desc: "Missiles that seek the nearest enemy." }
   };
   var UPGRADES = [
-    { id: "dmg", name: "Damage", desc: "+10% damage per level", costs: [100, 200, 350, 550, 800] },
-    { id: "rate", name: "Fire Rate", desc: "+8% fire rate per level", costs: [100, 200, 350, 550, 800] },
-    { id: "hp", name: "Max HP", desc: "+20 max HP per level", costs: [100, 200, 350, 550, 800] },
-    { id: "shield", name: "Shield", desc: "+15 max shield per level", costs: [100, 200, 350, 550, 800] },
-    { id: "speed", name: "Speed", desc: "+5% movement speed per level", costs: [100, 200, 350, 550, 800] },
-    { id: "cd", name: "Ability Cooldown", desc: "-8% ability recharge per level", costs: [150, 300, 500, 750, 1000] }
+    /* 10 levels. Costs continue the existing increment pattern
+       (+100,+150,+200,+250 -> +300,+350,+400,+450,+500). */
+    { id: "dmg", name: "Damage", desc: "+10% damage per level", costs: [100, 200, 350, 550, 800, 1100, 1450, 1850, 2300, 2800] },
+    { id: "rate", name: "Fire Rate", desc: "+8% fire rate per level", costs: [100, 200, 350, 550, 800, 1100, 1450, 1850, 2300, 2800] },
+    { id: "hp", name: "Max HP", desc: "+20 max HP per level", costs: [100, 200, 350, 550, 800, 1100, 1450, 1850, 2300, 2800] },
+    { id: "shield", name: "Shield", desc: "+15 max shield per level", costs: [100, 200, 350, 550, 800, 1100, 1450, 1850, 2300, 2800] },
+    { id: "speed", name: "Speed", desc: "+5% movement speed per level", costs: [100, 200, 350, 550, 800, 1100, 1450, 1850, 2300, 2800] },
+    { id: "cd", name: "Ability Cooldown", desc: "-8% ability recharge per level", costs: [150, 300, 500, 750, 1000, 1350, 1750, 2200, 2700, 3250] }
   ];
   var ENEMIES = {
     drone: { hp: 20, speed: 90, pts: 10, radius: 14, color: "#f87171" },
@@ -102,7 +104,7 @@
       if (WEAPONS[d.weapon]) s.weapon = d.weapon;
       if (d.upgrades && typeof d.upgrades === "object") UPGRADES.forEach(function (u) {
         var v = d.upgrades[u.id];
-        if (typeof v === "number" && v >= 0 && v <= 5) s.upgrades[u.id] = Math.floor(v);
+        if (typeof v === "number" && v >= 0 && v <= 10) s.upgrades[u.id] = Math.floor(v);
       });
       if (d.missions && typeof d.missions === "object") s.missions = d.missions;
       if (Array.isArray(d.achievements)) s.achievements = d.achievements.filter(function (x) { return ACHIEVEMENTS.some(function (a) { return a.id === x; }); });
@@ -331,7 +333,9 @@
       speed: ship.speed * (1 + 0.05 * u.speed),
       dmgMul: ship.dmg * (1 + 0.10 * u.dmg),
       fireMul: 1 + 0.08 * u.rate,
-      cdMul: Math.max(0.5, 1 - 0.08 * u.cd),
+      /* Floor 0.2 so all 10 Cooldown levels give real progression
+         (level 10 = 20% of base recharge; charges still gate uses). */
+      cdMul: Math.max(0.2, 1 - 0.08 * u.cd),
       charges: ship.charges
     };
   }
@@ -417,7 +421,7 @@
       else { idx = (param - 1) % 3; cycle = Math.floor((param - 1) / 3); }
     }
     else if (kind === "endless") { idx = (param - 1) % 3; cycle = param - 1; G.wave = param * 5; }
-    else { idx = param % 3; cycle = Math.floor(param / 3); G.wave = param + 1; }
+    else { idx = param % 3; cycle = Math.floor(param / 3); G.wave = param + 1; G.bossIndex = param; /* keep the rush chain in sync (Continue/resume) */ }
     var base = BOSSES[idx];
     var hp = Math.round(base.hp * (1 + 0.5 * cycle));
     G.boss = { kind: kind, param: param, type: base.id, name: base.name, hp: hp, maxHp: hp,
@@ -593,6 +597,10 @@
       if (G.stage >= 5) victory();
       else stageClear();
     } else {
+      /* Boss Rush: the chain must advance — defeating a boss spawns
+         the NEXT boss (Dreadnought -> Hive Queen -> Leviathan, then
+         the loop repeats with +50% HP per cycle). */
+      if (G.mode === "bossrush") { G.bossIndex++; toast("Boss down! Boss " + (G.bossIndex + 1) + " incoming…"); }
       G.waveState = "inter"; G.interTimer = G.mode === "bossrush" ? 3 : 2;
     }
   }
@@ -903,6 +911,12 @@
     ctx.beginPath(); ctx.moveTo(p.x, p.y - 16); ctx.lineTo(p.x + 11, p.y + 12); ctx.lineTo(p.x - 11, p.y + 12); ctx.closePath(); ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.beginPath(); ctx.moveTo(p.x, p.y - 8); ctx.lineTo(p.x + 4, p.y + 6); ctx.lineTo(p.x - 4, p.y + 6); ctx.closePath(); ctx.fill();
+    /* Wing tips + canopy so the ship reads as a fighter, not a triangle. */
+    ctx.fillStyle = shipColor;
+    ctx.beginPath(); ctx.moveTo(p.x - 11, p.y + 12); ctx.lineTo(p.x - 18, p.y + 17); ctx.lineTo(p.x - 7, p.y + 16); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(p.x + 11, p.y + 12); ctx.lineTo(p.x + 18, p.y + 17); ctx.lineTo(p.x + 7, p.y + 16); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(p.x, p.y - 3, 2.5, 0, Math.PI * 2); ctx.fill();
     if (p.shield > 0) {
       ctx.strokeStyle = "rgba(56,189,248,0.6)";
       ctx.lineWidth = 2;
@@ -929,22 +943,59 @@
         ctx.fillStyle = "rgba(10,16,34,0.8)"; ctx.fillRect(e.x - 13, e.y - e.radius - 9, 26, 4);
         ctx.fillStyle = "#4ade80"; ctx.fillRect(e.x - 13, e.y - e.radius - 9, 26 * Math.max(0, e.hp / e.maxHp), 4);
       }
+      /* Distinct cockpit/core detail per enemy type, so each
+         category reads as its own ship, not a bare shape. */
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      if (e.type === "drone") {
+        ctx.beginPath(); ctx.arc(e.x, e.y - 1, 3, 0, Math.PI * 2); ctx.fill();
+      } else if (e.type === "weaver") {
+        ctx.beginPath(); ctx.moveTo(e.x, e.y - 5); ctx.lineTo(e.x + 4, e.y); ctx.lineTo(e.x, e.y + 5); ctx.lineTo(e.x - 4, e.y); ctx.closePath(); ctx.fill();
+      } else if (e.type === "tank") {
+        ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(e.x, e.y, 10, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(e.x, e.y, 3.5, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(e.x, e.y - 1, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(e.x - 1, e.y + 6, 2, 5);
+      }
     });
   }
   function drawBoss() {
     var b = G.boss; if (!b) return;
     ctx.fillStyle = b.color;
     if (b.type === "dreadnought") {
-      ctx.fillRect(b.x - 60, b.y - 20, 120, 40);
-      ctx.beginPath(); ctx.arc(b.x, b.y, 24, 0, Math.PI * 2); ctx.fill();
+      /* Capital ship: armored hull + swept wings + twin cannons. */
+      ctx.beginPath();
+      ctx.moveTo(b.x - 62, b.y - 8); ctx.lineTo(b.x - 30, b.y - 26); ctx.lineTo(b.x + 30, b.y - 26); ctx.lineTo(b.x + 62, b.y - 8);
+      ctx.lineTo(b.x + 62, b.y + 10); ctx.lineTo(b.x + 30, b.y + 26); ctx.lineTo(b.x - 30, b.y + 26); ctx.lineTo(b.x - 62, b.y + 10);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#0b1220";
+      ctx.fillRect(b.x - 54, b.y - 1, 16, 5);
+      ctx.fillRect(b.x + 38, b.y - 1, 16, 5);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = b.color;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fill();
     } else if (b.type === "hive") {
+      /* Hive Queen: orb + four orbiting pods + glowing core. */
       ctx.beginPath(); ctx.arc(b.x, b.y, 42, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(b.x, b.y, 18, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
+      [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (d) {
+        ctx.beginPath(); ctx.arc(b.x + d[0] * 46, b.y + d[1] * 30, 10, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(b.x, b.y, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = b.color;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 8, 0, Math.PI * 2); ctx.fill();
     } else {
+      /* Void Leviathan: serpent diamond + fins + eye. */
       ctx.beginPath(); ctx.moveTo(b.x, b.y - 44); ctx.lineTo(b.x + 34, b.y); ctx.lineTo(b.x, b.y + 44); ctx.lineTo(b.x - 34, b.y); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(b.x - 34, b.y - 6); ctx.lineTo(b.x - 52, b.y); ctx.lineTo(b.x - 34, b.y + 6); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(b.x + 34, b.y - 6); ctx.lineTo(b.x + 52, b.y); ctx.lineTo(b.x + 34, b.y + 6); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 11, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "#0b1220";
+      ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fill();
     }
-    ctx.fillStyle = "#fff";
-    ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fill();
   }
   function drawBullets() {
     G.bullets.forEach(function (b) {
@@ -960,23 +1011,57 @@
       ctx.beginPath(); ctx.arc(b.x, b.y, 2, 0, Math.PI * 2); ctx.fill();
     });
   }
+  /* Pictorial glyph for each power-up, drawn inside the orb so every
+     pickup is recognizable at a glance — no more letter codes. */
+  function drawPowerupGlyph(type, x, y) {
+    ctx.fillStyle = "#04121a";
+    ctx.strokeStyle = "#04121a";
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    if (type === "rapid") { /* rocket */
+      ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 3, y + 2); ctx.lineTo(x - 3, y + 2); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x - 3, y + 2); ctx.lineTo(x - 5.5, y + 5.5); ctx.lineTo(x - 3, y + 5.5); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + 3, y + 2); ctx.lineTo(x + 5.5, y + 5.5); ctx.lineTo(x + 3, y + 5.5); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x - 1.5, y + 2); ctx.lineTo(x + 1.5, y + 2); ctx.lineTo(x, y + 6.5); ctx.closePath(); ctx.fill();
+    } else if (type === "damage") { /* crosshair */
+      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 1.4, 0, Math.PI * 2); ctx.fill();
+      [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(function (d) {
+        ctx.beginPath(); ctx.moveTo(x + d[0] * 6.5, y + d[1] * 6.5); ctx.lineTo(x + d[0] * 8.5, y + d[1] * 8.5); ctx.stroke();
+      });
+    } else if (type === "repair") { /* medical cross */
+      ctx.fillRect(x - 2, y - 6, 4, 12);
+      ctx.fillRect(x - 6, y - 2, 12, 4);
+    } else if (type === "shield") { /* shield with check */
+      ctx.beginPath(); ctx.moveTo(x, y - 7);
+      ctx.quadraticCurveTo(x + 5.5, y - 6, x + 5.5, y - 2.5);
+      ctx.quadraticCurveTo(x + 5.5, y + 3.5, x, y + 7.5);
+      ctx.quadraticCurveTo(x - 5.5, y + 3.5, x - 5.5, y - 2.5);
+      ctx.quadraticCurveTo(x - 5.5, y - 6, x, y - 7);
+      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 3, y); ctx.lineTo(x - 1, y + 2.5); ctx.lineTo(x + 3.5, y - 2.5); ctx.stroke();
+    } else { /* speed: lightning bolt */
+      ctx.beginPath(); ctx.moveTo(x + 2, y - 7); ctx.lineTo(x - 3.5, y + 1); ctx.lineTo(x - 0.5, y + 1);
+      ctx.lineTo(x - 2, y + 7); ctx.lineTo(x + 4, y - 2); ctx.lineTo(x + 0.5, y - 2); ctx.closePath(); ctx.fill();
+    }
+  }
   function drawPowerups() {
     G.powerups.forEach(function (pu) {
       var info = POWERUPS[pu.type];
       ctx.fillStyle = info.color;
       ctx.beginPath(); ctx.arc(pu.x, pu.y, 13, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#04121a";
-      ctx.font = "bold 12px system-ui, sans-serif";
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      var letter = pu.type === "rapid" ? "R" : pu.type === "damage" ? "×2" : pu.type === "repair" ? "+" : pu.type === "shield" ? "S" : "Z";
-      ctx.fillText(letter, pu.x, pu.y + 0.5);
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(pu.x, pu.y, 13, 0, Math.PI * 2); ctx.stroke();
+      drawPowerupGlyph(pu.type, pu.x, pu.y);
     });
   }
   function drawParticles() {
     G.particles.forEach(function (pt) {
       ctx.globalAlpha = Math.max(0, pt.life / pt.maxLife);
       ctx.fillStyle = pt.color;
-      ctx.fillRect(pt.x, pt.y, pt.size, pt.size);
+      /* Round sparks, not squares. */
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.size / 2, 0, Math.PI * 2); ctx.fill();
     });
     ctx.globalAlpha = 1;
   }
@@ -1062,13 +1147,14 @@
     $("lab-credits").textContent = save.credits;
     $("upgrade-list").innerHTML = UPGRADES.map(function (u) {
       var lvl = save.upgrades[u.id];
-      var maxed = lvl >= 5;
+      var maxLvl = u.costs.length;
+      var maxed = lvl >= maxLvl;
       var cost = maxed ? 0 : u.costs[lvl];
       var pips = "";
-      for (var i = 0; i < 5; i++) pips += '<span class="' + (i < lvl ? "" : "off") + '">●</span>';
+      for (var i = 0; i < maxLvl; i++) pips += '<span class="' + (i < lvl ? "" : "off") + '">●</span>';
       var btn = maxed ? '<button class="btn sm" disabled>MAXED</button>'
         : '<button class="btn sm" data-buy-up="' + u.id + '"' + (save.credits < cost ? " disabled" : "") + '>Buy — ' + cost + ' 💎</button>';
-      return '<div class="item-card"><h4>' + esc(u.name) + '</h4><p>' + esc(u.desc) + '</p><div class="pips">' + pips + '</div><div class="row"><span>Level ' + lvl + ' / 5</span>' + btn + '</div></div>';
+      return '<div class="item-card"><h4>' + esc(u.name) + '</h4><p>' + esc(u.desc) + '</p><div class="pips">' + pips + '</div><div class="row"><span>Level ' + lvl + ' / ' + maxLvl + '</span>' + btn + '</div></div>';
     }).join("");
   }
   function missionProgress(m) {
@@ -1182,7 +1268,7 @@
     if (!buy) return;
     var u = UPGRADES.find(function (x) { return x.id === buy.getAttribute("data-buy-up"); });
     var lvl = save.upgrades[u.id];
-    if (lvl >= 5) return;
+    if (lvl >= u.costs.length) return;
     var cost = u.costs[lvl];
     if (save.credits < cost) { toast("Not enough credits."); return; }
     save.credits -= cost; save.upgrades[u.id] = lvl + 1; persist();
@@ -1248,6 +1334,12 @@
     start: function (mode) { startRun(mode || "endless"); },
     pause: function () { pauseGame(); },
     resume: function () { resumeGame(); },
-    endRun: function () { if (G) endRun("gameover"); }
+    endRun: function () { if (G) endRun("gameover"); },
+    boss: function () { return G && G.boss ? { name: G.boss.name, type: G.boss.type, hp: G.boss.hp, maxHp: G.boss.maxHp } : null; },
+    bossIndex: function () { return G ? G.bossIndex : -1; },
+    killBoss: function () { if (G && G.boss) killBoss(); },
+    stats: function () { return G ? { dmgMul: G.player.dmgMul, fireMul: G.player.fireMul, maxHp: G.player.maxHp, maxShield: G.player.maxShield, speed: G.player.speed, cdMul: G.player.cdMul } : null; },
+    upgrades: function () { return { upgrades: save.upgrades, credits: save.credits }; },
+    spawnPowerup: function (type, x, y) { if (G) G.powerups.push({ x: x || 240, y: y || 200, type: type, vy: 0, age: 0 }); }
   };
 })();
