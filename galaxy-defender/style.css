@@ -1,7 +1,7 @@
 /* Galaxy Defender — neon sci-fi UI, no external assets */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overscroll-behavior: none; }
-#app { min-height: 100dvh; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 0%, #101a3a 0%, #05060f 60%); }
+#app { min-height: 100dvh; display: flex; align-items: flex-start; justify-content: center; background: radial-gradient(ellipse at 50% 0%, #101a3a 0%, #05060f 60%); }
 #game-shell { position: relative; overflow: hidden; background: #05060f; border: 1px solid #1e2a4a; border-radius: 12px; box-shadow: 0 0 40px rgba(34, 211, 238, 0.15); touch-action: none; user-select: none; }
 #game { display: block; width: 100%; height: 100%; }
 .hidden { display: none !important; }
@@ -9,6 +9,8 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 /* ---------- screens ---------- */
 .screen { position: absolute; inset: 0; overflow-y: auto; padding: 20px 18px 28px; background: rgba(5, 6, 15, 0.82); display: flex; flex-direction: column; align-items: stretch; gap: 12px; z-index: 20; }
 .screen.overlay { background: rgba(5, 6, 15, 0.78); justify-content: center; }
+/* Pause menu sits at the very top of the screen, small gap above it. */
+#screen-pause { justify-content: flex-start; padding-top: 18px; }
 .screen-title { margin: 6px 0 2px; font-size: 24px; letter-spacing: 3px; text-align: center; color: #7ee7ff; text-shadow: 0 0 14px rgba(34, 211, 238, 0.6); }
 .logo { font-size: 34px; font-weight: 900; letter-spacing: 4px; text-align: center; line-height: 1.05; margin-top: 14px; color: #fff; text-shadow: 0 0 22px rgba(34, 211, 238, 0.8); }
 .logo span { display: block; color: #22d3ee; }
@@ -77,7 +79,7 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 .bar.boss { max-width: none; height: 12px; }
 .bar-num { font-size: 11px; min-width: 26px; }
 .lives { font-size: 15px; letter-spacing: 2px; margin-top: 2px; }
-.hud-right { text-align: right; font-size: 12px; line-height: 1.5; }
+.hud-right { text-align: right; font-size: 12px; line-height: 1.5; margin-top: 40px; }
 .hud-score { font-size: 15px; font-weight: 800; color: #fff; }
 .hud-credits { color: #ffd166; font-weight: 700; }
 .hud-wave { color: #9db8d6; }
@@ -85,14 +87,14 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 .combo { position: absolute; top: 74px; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 900; color: #ffd166; text-shadow: 0 0 12px rgba(255, 209, 102, 0.8); }
 .powerup-timers { position: absolute; top: 104px; left: 10px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .pu-tag { background: rgba(10, 16, 34, 0.85); border: 1px solid #22d3ee; border-radius: 6px; padding: 2px 7px; }
-.boss-bar-wrap { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 62%; text-align: center; }
+.boss-bar-wrap { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 48%; text-align: center; }
 .boss-name { font-size: 12px; font-weight: 800; color: #fca5a5; letter-spacing: 2px; margin-bottom: 3px; }
-.hud-btn { pointer-events: auto; position: absolute; top: auto; background: rgba(10, 16, 34, 0.8); border: 1px solid #334155; border-radius: 8px; color: #e8f6ff; font-size: 16px; width: 36px; height: 36px; cursor: pointer; }
-#sound-toggle { bottom: 132px; right: 10px; }
-#pause-btn { bottom: 90px; right: 10px; }
+.hud-btn { pointer-events: auto; background: rgba(10, 16, 34, 0.8); border: 1px solid #334155; border-radius: 8px; color: #e8f6ff; font-size: 16px; width: 34px; height: 34px; flex-shrink: 0; cursor: pointer; }
 
 /* ---------- touch controls ---------- */
-#touch-controls { position: absolute; inset: 0; pointer-events: none; z-index: 11; }
+/* Touch controls live in a fixed zone at the very bottom of the
+   screen, BELOW the game canvas — not overlaid on top of it. */
+#touch-controls { position: fixed; left: 0; right: 0; bottom: 0; height: 150px; pointer-events: none; z-index: 11; touch-action: none; }
 .joystick { position: absolute; left: 14px; bottom: 18px; width: 110px; height: 110px; border-radius: 50%; background: rgba(10, 16, 34, 0.55); border: 2px solid rgba(34, 211, 238, 0.5); pointer-events: auto; }
 .joy-knob { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; background: rgba(34, 211, 238, 0.7); box-shadow: 0 0 14px rgba(34, 211, 238, 0.7); }
 .touch-btn { pointer-events: auto; border: 2px solid rgba(34, 211, 238, 0.6); background: rgba(10, 16, 34, 0.6); color: #fff; border-radius: 50%; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 20px; position: relative; }
@@ -100,8 +102,7 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 .touch-btn:active { background: rgba(34, 211, 238, 0.35); }
 .touch-btn .ab-cd { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900; color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: 50%; }
 .touch-btn .ab-charges { position: absolute; top: -4px; right: -2px; font-style: normal; font-size: 11px; background: #22d3ee; color: #04121a; border-radius: 8px; padding: 0 5px; font-weight: 800; }
-#btn-fire { position: absolute; right: 16px; bottom: 18px; width: 78px; height: 78px; border-color: rgba(239, 68, 68, 0.7); }
-.ab-row { position: absolute; right: 12px; bottom: 106px; display: flex; gap: 8px; }
+.ab-row { position: absolute; right: 12px; bottom: 18px; display: flex; gap: 8px; }
 .ab-row .ab { width: 54px; height: 54px; font-size: 18px; }
 .ab-ic { display: inline-flex; width: 20px; height: 20px; }
 .ab-ic svg { width: 100%; height: 100%; }
@@ -112,7 +113,8 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 .banner { position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%); z-index: 15; font-size: 26px; font-weight: 900; letter-spacing: 3px; text-align: center; color: #fff; text-shadow: 0 0 18px rgba(34, 211, 238, 0.9); pointer-events: none; white-space: nowrap; }
 .banner.warn { color: #fca5a5; text-shadow: 0 0 18px rgba(239, 68, 68, 0.9); }
 .toasts { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 16; display: flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: none; }
-.toast { background: rgba(10, 16, 34, 0.92); border: 1px solid #22d3ee; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 700; white-space: nowrap; animation: toast-in 0.2s ease; }
+.toast { background: rgba(10, 16, 34, 0.92); border: 1px solid #22d3ee; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 700; white-space: nowrap; animation: toast-in 0.2s ease; pointer-events: auto; cursor: pointer; transition: opacity 0.3s; }
+.toast-out { opacity: 0; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {
