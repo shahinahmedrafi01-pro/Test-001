@@ -112,19 +112,33 @@
   </div>
 </div>
 <script>
-/* Ownership gate: the game only loads if this device owns it (bought on the hub for 30 diamonds).
-   Not owned -> the lock screen shows and game.js never loads, so the game cannot start. */
+/* Ownership gate: the game only loads if the logged-in Supabase
+   account owns it (bought on the hub for 30 diamonds — one-time,
+   works on any device). The publishable key below is PUBLIC by
+   design (safe in browser code — Supabase docs). Not owned (or no
+   account / offline) -> the lock screen shows and game.js never
+   loads, so the game cannot start. */
 (function () {
-  var owned = false;
-  try { owned = JSON.parse(localStorage.getItem("gg_owned") || "[]").indexOf("police-chase") !== -1; } catch (e) {}
-  if (owned) {
-    var s = document.createElement("script");
-    s.src = "game.js";
-    document.body.appendChild(s);
-  } else {
+  var SUPABASE_URL = "https://wbnllmrosehgdwqqwfgd.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_GdfRPeymhpIxb4M4bhbS6Q_mizvMA06";
+  function locked() {
     document.getElementById("lock").classList.remove("hidden");
     document.getElementById("menu").classList.add("hidden");
   }
+  function loadGame() {
+    var s = document.createElement("script");
+    s.src = "game.js";
+    document.body.appendChild(s);
+  }
+  var u = "";
+  try { u = JSON.parse(localStorage.getItem("gg_shop_user") || '""') || ""; } catch (e) {}
+  if (!u) { locked(); return; }
+  fetch(SUPABASE_URL + "/rest/v1/profiles?username=eq." + encodeURIComponent(String(u).toLowerCase()) + "&select=owned", {
+    headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+  }).then(function (r) { return r.json(); }).then(function (rows) {
+    var owned = Array.isArray(rows) && rows.length && Array.isArray(rows[0].owned) && rows[0].owned.indexOf("police-chase") !== -1;
+    if (owned) loadGame(); else locked();
+  }).catch(function () { locked(); });
 })();
 </script>
 </body>
