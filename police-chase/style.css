@@ -75,6 +75,7 @@ body {
   padding: 0 14px calc(14px + env(safe-area-inset-bottom));
   pointer-events: none;
 }
+.tc-col { display: flex; flex-direction: column; gap: 10px; }
 #touch-controls button {
   pointer-events: auto; width: 74px; height: 74px; border-radius: 50%;
   font-size: 28px; color: #22d3ee; background: rgba(5,5,20,0.55);

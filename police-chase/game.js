@@ -71,7 +71,9 @@ function layout() {
   roadW = Math.min(W * 0.86, 520);
   roadX = (W - roadW) / 2;
   laneW = roadW / LANES;
-  playerY = H * 0.78;
+  // keep the player's vertical position across resizes; set default on first layout
+  if (!playerY) playerY = H * 0.78;
+  playerY = clamp(playerY, H * 0.30, H * 0.86);
   carScale = clamp(Math.min(W, H) / 700, 0.72, 1.15);
 }
 function laneX(i) { return roadX + laneW * (i + 0.5); }
@@ -106,6 +108,7 @@ try { best = parseInt(localStorage.getItem(BEST_KEY) || "0", 10) || 0; } catch (
 function resetGame() {
   lane = 2; lives = 3; score = 0; distM = 0;
   speedKmh = 70; elapsed = 0;
+  playerY = H * 0.78;
   traffic = []; police = []; pickups = []; parts = []; popups = []; bombs = [];
   spawnT = 1.2; pickupT = 8; policeT = 20; lastLane = -1;
   iframes = 0; shieldT = 0; phaseT = 0; nitroT = 0;
@@ -127,14 +130,14 @@ function spawnTraffic() {
   lastLane = l;
   var kind = Math.random();
   var t;
-  if (kind < 0.14) {           // road barrier — static, full road speed
-    t = { kind: "barrier", lane: l, x: laneX(l), y: -40, w: 44, h: 30, vy: 0 };
-  } else if (kind < 0.34) {    // truck — long + slow
+  if (kind < 0.20) {              // truck — long + slow
     t = { kind: "truck", lane: l, x: laneX(l), y: -110, w: 40, h: 104, vy: rand(0.32, 0.42), color: choice(TRAFFIC_COLORS) };
-  } else {                     // car
+  } else {                        // car
     t = { kind: "car", lane: l, x: laneX(l), y: -80, w: 36, h: 66, vy: rand(0.38, 0.58), color: choice(TRAFFIC_COLORS) };
   }
   t.passed = false;
+  t.changed = false;              // NPC lane-change: used at most once per car (avoidance only)
+  t.tx = t.x;                     // smoothed x target for lane changes
   traffic.push(t);
 }
 
@@ -146,7 +149,8 @@ function spawnPolice(chaseMode) {
     // chase cops run slightly faster than the player; patrol cops start slower
     top: chaseMode ? speedKmh * 1.06 : speedKmh * (0.80 + Math.min(0.30, elapsed * 0.0022)),
     mode: chaseMode ? "chase" : "cruise",
-    aggro: aggro, flash: Math.random() * 10
+    aggro: aggro, flash: Math.random() * 10,
+    hits: 0, hitCD: 0          // NPC-collision count + per-cop cooldown (2 hits = destroyed)
   });
   AudioSys.siren();
 }
@@ -420,9 +424,36 @@ function update(dt) {
   var pw = playerW(), ph = playerH();
   for (var i = traffic.length - 1; i >= 0; i--) {
     var t = traffic[i];
-    var ownV = t.kind === "barrier" ? 0 : t.vy * effSpeed * PPK;
+    var ownV = t.vy * effSpeed * PPK;
     t.y += (roadV - ownV) * dt;
+    // smooth x toward lane-change target
+    if (t.tx == null) t.tx = t.x;
+    t.x += (t.tx - t.x) * Math.min(1, dt * 6);
     if (t.y > H + 120) { traffic.splice(i, 1); continue; }
+    // NPC avoidance: if a slower vehicle is close ahead in the same lane and
+    // this car hasn't changed lane yet, shift one lane (once per car) to dodge it
+    if (!t.changed) {
+      var blocked = false;
+      for (var o = 0; o < traffic.length; o++) {
+        var other = traffic[o];
+        if (other === t) continue;
+        if (other.lane === t.lane && other.y < t.y && t.y - other.y < 150 && other.vy < t.vy) { blocked = true; break; }
+      }
+      if (blocked) {
+        var dirs = [1, -1]; // try right first, then left
+        for (var d = 0; d < dirs.length; d++) {
+          var nl = t.lane + dirs[d];
+          if (nl < 0 || nl >= LANES) continue;
+          var clear = true;
+          for (var o2 = 0; o2 < traffic.length; o2++) {
+            var o3 = traffic[o2];
+            if (o3 === t) continue;
+            if (o3.lane === nl && Math.abs(o3.y - t.y) < 110) { clear = false; break; }
+          }
+          if (clear) { t.lane = nl; t.tx = laneX(nl); t.changed = true; break; }
+        }
+      }
+    }
     // near miss: passed player closely without touching
     if (!t.passed && t.y - t.h / 2 > playerY + ph / 2) {
       t.passed = true;
@@ -436,26 +467,6 @@ function update(dt) {
       traffic.splice(i, 1);
       hitPlayer(t.x, t.y);
       if (state !== "playing") return;
-    }
-  }
-
-  // fairness: NPC cars/trucks also crash into road barriers
-  // (barriers used to hurt only the player while NPC traffic drove through them untouched)
-  for (var bi = traffic.length - 1; bi >= 0; bi--) {
-    var bar = traffic[bi];
-    if (bar.kind !== "barrier") continue;
-    for (var ci = traffic.length - 1; ci >= 0; ci--) {
-      var veh = traffic[ci];
-      if (veh.kind === "barrier") continue;
-      if (overlap(bar.x, bar.y, bar.w * carScale, bar.h * carScale, veh.x, veh.y, veh.w * carScale, veh.h * carScale)) {
-        burst(veh.x, veh.y, "#fbbf24", 16, 200);
-        burst(veh.x, veh.y, "#ef4444", 10, 160);
-        popup(veh.x, veh.y - 50, "CRASH!", "#fbbf24");
-        AudioSys.thud();
-        traffic.splice(ci, 1);
-        if (ci < bi) bi--;
-        break;
-      }
     }
   }
 
@@ -485,6 +496,35 @@ function update(dt) {
       police.splice(j, 1);
       hitPlayer(c.x, c.y);
       if (state !== "playing") return;
+    }
+  }
+
+  // police cars can no longer drive through NPC traffic:
+  // 1st hit slows the cop down, 2nd hit destroys it (cooldown keeps one
+  // continuous overlap from counting as two hits)
+  for (var ci2 = police.length - 1; ci2 >= 0; ci2--) {
+    var cc = police[ci2];
+    if (cc.mode === "surround") continue;
+    if (cc.hitCD > 0) { cc.hitCD -= dt; continue; }
+    for (var ti2 = traffic.length - 1; ti2 >= 0; ti2--) {
+      var tv = traffic[ti2];
+      if (overlap(cc.x, cc.y, cc.w * carScale, cc.h * carScale, tv.x, tv.y, tv.w * carScale, tv.h * carScale)) {
+        cc.hits = (cc.hits || 0) + 1;
+        if (cc.hits >= 2) {
+          burst(cc.x, cc.y, "#f97316", 22, 240);
+          burst(cc.x, cc.y, "#ef4444", 14, 200);
+          popup(cc.x, cc.y - 50, "BOOM!", "#ef4444");
+          AudioSys.thud();
+          police.splice(ci2, 1);
+        } else {
+          cc.top = Math.min(cc.top, speedKmh * 0.5);
+          cc.hitCD = 1.2;
+          burst(cc.x, cc.y, "#fbbf24", 12, 180);
+          popup(cc.x, cc.y - 50, "SLOWED!", "#fbbf24");
+          AudioSys.thud();
+        }
+        break;
+      }
     }
   }
 
@@ -647,18 +687,6 @@ function drawCar(x, y, w, h, body, opts) {
   ctx.restore();
 }
 
-function drawBarrier(t) {
-  var s = carScale, w = t.w * s, h = t.h * s;
-  ctx.save(); ctx.translate(t.x, t.y);
-  ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(-w / 2 + 3, -h / 2 + 5, w, h);
-  for (var i = 0; i < 4; i++) {
-    ctx.fillStyle = i % 2 ? "#ef4444" : "#f8fafc";
-    ctx.fillRect(-w / 2 + (w / 4) * i, -h / 2, w / 4, h);
-  }
-  ctx.fillStyle = "#111"; ctx.fillRect(-w / 2, -h / 2 - 4, w, 4); ctx.fillRect(-w / 2, h / 2, w, 4);
-  ctx.restore();
-}
-
 var PICKUP_STYLE = {
   nitro: { c: "#fb923c", t: "N" }, shield: { c: "#60a5fa", t: "S" },
   phase: { c: "#22d3ee", t: "P" }, repair: { c: "#4ade80", t: "+" }
@@ -684,8 +712,7 @@ function render() {
   for (i = 0; i < pickups.length; i++) drawPickup(pickups[i]);
   for (i = 0; i < traffic.length; i++) {
     var t = traffic[i];
-    if (t.kind === "barrier") drawBarrier(t);
-    else if (t.kind === "truck") {
+    if (t.kind === "truck") {
       drawCar(t.x, t.y - 18 * carScale, t.w, 52, t.color, {});
       drawCar(t.x, t.y + 30 * carScale, t.w, 40, "#1f2937", { roof: "#374151" });
     }
@@ -833,11 +860,21 @@ function moveRight() {
   if (state !== "playing" || arresting) return;
   if (lane < LANES - 1) { lane++; AudioSys.ensure(); } else wallScrape(1);
 }
+function moveForward() {   // up the screen = forward (hold to keep going)
+  if (state !== "playing" || arresting) return;
+  playerY = clamp(playerY - H * 0.07, H * 0.30, H * 0.86);
+}
+function moveBack() {      // down the screen = backward (hold to keep going)
+  if (state !== "playing" || arresting) return;
+  playerY = clamp(playerY + H * 0.07, H * 0.30, H * 0.86);
+}
 
 document.addEventListener("keydown", function (e) {
   var k = e.key;
   if (k === "ArrowLeft" || k === "a" || k === "A") { moveLeft(); e.preventDefault(); }
   else if (k === "ArrowRight" || k === "d" || k === "D") { moveRight(); e.preventDefault(); }
+  else if (k === "ArrowUp" || k === "w" || k === "W") { moveForward(); e.preventDefault(); }
+  else if (k === "ArrowDown" || k === "s" || k === "S") { moveBack(); e.preventDefault(); }
   else if (k === "p" || k === "P" || k === "Escape") {
     if (state === "playing") pauseGame(); else if (state === "paused") resumeGame();
   }
@@ -857,6 +894,27 @@ function bindBtn(id, fn) {
 }
 bindBtn("btn-left", moveLeft);
 bindBtn("btn-right", moveRight);
+// hold-to-move buttons: fire once immediately, then repeat while held
+function bindHoldBtn(id, fn) {
+  var b = $(id), iv = null, lastTouch = 0;
+  function start(e) {
+    e.preventDefault();
+    if (e.type === "mousedown" && Date.now() - lastTouch < 500) return; // touch already fired
+    if (e.type === "touchstart") lastTouch = Date.now();
+    fn();
+    if (iv) clearInterval(iv);
+    iv = setInterval(fn, 90);
+  }
+  function stop() { if (iv) { clearInterval(iv); iv = null; } }
+  b.addEventListener("touchstart", start, { passive: false });
+  b.addEventListener("touchend", stop);
+  b.addEventListener("touchcancel", stop);
+  b.addEventListener("mousedown", start);
+  b.addEventListener("mouseup", stop);
+  b.addEventListener("mouseleave", stop);
+}
+bindHoldBtn("btn-fwd", moveForward);
+bindHoldBtn("btn-back", moveBack);
 bindBtn("btn-pause", function () { if (state === "playing") pauseGame(); else if (state === "paused") resumeGame(); });
 
 // swipe on canvas
@@ -867,6 +925,7 @@ canvas.addEventListener("touchstart", function (e) {
 canvas.addEventListener("touchend", function (e) {
   var t = e.changedTouches[0], dx = t.clientX - touchSX, dy = t.clientY - touchSY;
   if (Math.abs(dx) > 28 && Math.abs(dx) > Math.abs(dy)) { dx > 0 ? moveRight() : moveLeft(); }
+  else if (Math.abs(dy) > 28 && Math.abs(dy) > Math.abs(dx)) { dy > 0 ? moveBack() : moveForward(); }
 }, { passive: true });
 document.addEventListener("touchmove", function (e) {
   if (state === "playing") e.preventDefault();
@@ -938,20 +997,22 @@ window.__t = {
   playerY: function () { return playerY; },
   laneX: laneX,
   start: startGame, pause: pauseGame, resume: resumeGame,
-  moveLeft: moveLeft, moveRight: moveRight,
+  moveLeft: moveLeft, moveRight: moveRight, moveForward: moveForward, moveBack: moveBack,
   frame: function (dt) { update(dt); },
   spawnTraffic: spawnTraffic, spawnPolice: spawnPolice, spawnPickup: spawnPickup,
   setLane: function (l) { lane = l; px = laneX(l); },
   forceSpawnAt: function (kind, l, y) {
-    var t = kind === "barrier"
-      ? { kind: "barrier", lane: l, x: laneX(l), y: y, w: 44, h: 30, vy: 0 }
-      : { kind: "car", lane: l, x: laneX(l), y: y, w: 36, h: 66, vy: 0.4, color: "#fff", passed: true };
+    var t = { kind: kind === "truck" ? "truck" : "car", lane: l, x: laneX(l), y: y,
+      w: kind === "truck" ? 40 : 36, h: kind === "truck" ? 104 : 66,
+      vy: 0.4, color: "#fff", passed: true, changed: false, tx: laneX(l) };
     traffic.push(t); return t;
   },
   forcePoliceAt: function (l, y) {
-    var c = { lane: l, x: laneX(l), y: y, w: 38, h: 68, top: 300, aggro: 1, flash: 0 };
+    var c = { lane: l, x: laneX(l), y: y, w: 38, h: 68, top: 300, aggro: 1, flash: 0, hits: 0, hitCD: 0 };
     police.push(c); return c;
   },
+  policeInfo: function () { return police.map(function (c) { return { x: Math.round(c.x), y: Math.round(c.y), hits: c.hits || 0, top: Math.round(c.top) }; }); },
+  trafficInfo: function () { return traffic.map(function (t) { return { kind: t.kind, lane: t.lane, x: Math.round(t.x), y: Math.round(t.y), changed: !!t.changed }; }); },
   forcePickupAt: function (type, l, y) {
     var p = { type: type, lane: l, x: laneX(l), y: y == null ? playerY : y, bob: 0 };
     pickups.push(p); return p;
