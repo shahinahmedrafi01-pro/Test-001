@@ -103,6 +103,10 @@ html, body { margin: 0; padding: 0; background: #05060f; color: #e8f6ff; font-fa
 #btn-fire { position: absolute; right: 16px; bottom: 18px; width: 78px; height: 78px; border-color: rgba(239, 68, 68, 0.7); }
 .ab-row { position: absolute; right: 12px; bottom: 106px; display: flex; gap: 8px; }
 .ab-row .ab { width: 54px; height: 54px; font-size: 18px; }
+.ab-ic { display: inline-flex; width: 20px; height: 20px; }
+.ab-ic svg { width: 100%; height: 100%; }
+.pu-ic { display: inline-flex; width: 16px; height: 16px; vertical-align: -3px; margin: 0 1px; }
+.pu-ic svg { width: 100%; height: 100%; }
 
 /* ---------- banner / toasts ---------- */
 .banner { position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%); z-index: 15; font-size: 26px; font-weight: 900; letter-spacing: 3px; text-align: center; color: #fff; text-shadow: 0 0 18px rgba(34, 211, 238, 0.9); pointer-events: none; white-space: nowrap; }
