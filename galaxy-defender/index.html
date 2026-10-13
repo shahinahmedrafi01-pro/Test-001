@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Galaxy Defender</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="game-shell">
+    <canvas id="game" width="480" height="720"></canvas>
+
+    <!-- ============ HUD ============ -->
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div class="hud-left">
+          <div class="bar-row"><span class="bar-label">HP</span><div class="bar"><div id="hp-bar" class="bar-fill hp"></div></div><span id="hp-text" class="bar-num">100</span></div>
+          <div class="bar-row"><span class="bar-label">SH</span><div class="bar"><div id="shield-bar" class="bar-fill sh"></div></div><span id="shield-text" class="bar-num">0</span></div>
+          <div id="lives" class="lives"></div>
+        </div>
+        <div class="hud-right">
+          <div class="hud-score">SCORE <span id="score">0</span></div>
+          <div class="hud-credits">💎 <span id="credits-hud">0</span></div>
+          <div class="hud-wave"><span id="stage-label">STAGE 1</span> · <span id="wave-label">WAVE 1</span></div>
+          <div id="timer" class="hud-timer hidden">3:00</div>
+        </div>
+      </div>
+      <div id="combo" class="combo hidden"></div>
+      <div id="powerup-timers" class="powerup-timers"></div>
+      <div id="boss-bar-wrap" class="boss-bar-wrap hidden">
+        <div id="boss-name" class="boss-name">BOSS</div>
+        <div class="bar boss"><div id="boss-bar" class="bar-fill boss-fill"></div></div>
+      </div>
+      <button id="sound-toggle" class="hud-btn" aria-label="Toggle sound">🔇</button>
+      <button id="pause-btn" class="hud-btn" aria-label="Pause">⏸</button>
+    </div>
+
+    <!-- ============ TOUCH CONTROLS ============ -->
+    <div id="touch-controls" class="hidden">
+      <div id="joystick" class="joystick"><div id="joy-knob" class="joy-knob"></div></div>
+      <button id="btn-fire" class="touch-btn fire" aria-label="Fire">🔥<span>FIRE</span></button>
+      <div class="ab-row">
+        <button id="ab-0" class="touch-btn ab" data-ab="0" aria-label="EMP">⚡<span>EMP</span><b class="ab-cd"></b><i class="ab-charges"></i></button>
+        <button id="ab-1" class="touch-btn ab" data-ab="1" aria-label="Nova Bomb">💥<span>NOVA</span><b class="ab-cd"></b><i class="ab-charges"></i></button>
+        <button id="ab-2" class="touch-btn ab" data-ab="2" aria-label="Time Dilation">⏳<span>TIME</span><b class="ab-cd"></b><i class="ab-charges"></i></button>
+      </div>
+    </div>
+
+    <!-- ============ MAIN MENU ============ -->
+    <div id="menu" class="screen">
+      <div class="logo">GALAXY<span>DEFENDER</span></div>
+      <p class="tagline">Defend the galaxy. Survive the swarm. Slay the bosses.</p>
+      <div class="menu-credits">💎 Credits: <strong id="menu-credits">0</strong></div>
+      <div class="menu-btns">
+        <button id="btn-play" class="btn primary">▶ PLAY</button>
+        <button id="btn-continue" class="btn hidden">↻ CONTINUE RUN</button>
+        <button id="btn-hangar" class="btn">🛸 HANGAR</button>
+        <button id="btn-lab" class="btn">🔬 UPGRADES</button>
+        <button id="btn-missions" class="btn">🎯 MISSIONS</button>
+        <button id="btn-achievements" class="btn">🏆 ACHIEVEMENTS</button>
+        <button id="btn-settings" class="btn">⚙️ SETTINGS</button>
+        <button id="btn-howto" class="btn">❔ HOW TO PLAY</button>
+      </div>
+      <div class="panel hs-panel">
+        <h3>🏅 TOP PILOTS</h3>
+        <div id="highscores" class="highscores">No flights logged yet.</div>
+      </div>
+      <a class="hub-link" href="../">‹ Back to Arcade</a>
+    </div>
+
+    <!-- ============ MODE SELECT ============ -->
+    <div id="screen-play" class="screen hidden">
+      <h2 class="screen-title">SELECT MODE</h2>
+      <div class="mode-list">
+        <button class="mode-card" data-mode="campaign"><strong>📖 CAMPAIGN</strong><span>5 stages · 3 waves + boss each. Beat the Final Assault to win.</span></button>
+        <button class="mode-card" data-mode="endless"><strong>♾️ ENDLESS SURVIVAL</strong><span>Waves forever. Bosses every 5 waves. How long can you last?</span></button>
+        <button class="mode-card" data-mode="bossrush"><strong>👾 BOSS RUSH</strong><span>Boss after boss. No waves. Pure boss fights.</span></button>
+        <button class="mode-card" data-mode="timeattack"><strong>⏱️ TIME ATTACK</strong><span>3 minutes. Score as much as you can before the clock ends.</span></button>
+      </div>
+      <button id="btn-play-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ HANGAR ============ -->
+    <div id="screen-hangar" class="screen hidden">
+      <h2 class="screen-title">🛸 HANGAR</h2>
+      <div class="menu-credits">💎 Credits: <strong id="hangar-credits">0</strong></div>
+      <canvas id="hangar-preview" width="220" height="110"></canvas>
+      <h3 class="sub">SHIPS</h3>
+      <div id="ship-list" class="card-list"></div>
+      <h3 class="sub">WEAPONS</h3>
+      <div id="weapon-list" class="card-list"></div>
+      <button id="btn-hangar-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ LAB ============ -->
+    <div id="screen-lab" class="screen hidden">
+      <h2 class="screen-title">🔬 UPGRADE LAB</h2>
+      <div class="menu-credits">💎 Credits: <strong id="lab-credits">0</strong></div>
+      <p class="dim">Upgrades are permanent and apply to every run.</p>
+      <div id="upgrade-list" class="card-list"></div>
+      <button id="btn-lab-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ MISSIONS ============ -->
+    <div id="screen-missions" class="screen hidden">
+      <h2 class="screen-title">🎯 MISSIONS</h2>
+      <div id="mission-list" class="card-list"></div>
+      <button id="btn-missions-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ ACHIEVEMENTS ============ -->
+    <div id="screen-achievements" class="screen hidden">
+      <h2 class="screen-title">🏆 ACHIEVEMENTS</h2>
+      <div id="achievement-list" class="card-list"></div>
+      <button id="btn-achievements-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ SETTINGS ============ -->
+    <div id="screen-settings" class="screen hidden">
+      <h2 class="screen-title">⚙️ SETTINGS</h2>
+      <div class="settings-list">
+        <label class="set-row"><span>Sound</span><button id="set-sound-on" class="btn sm">OFF</button></label>
+        <label class="set-row"><span>Sound volume</span><input id="set-sound-vol" type="range" min="0" max="100" value="70"></label>
+        <label class="set-row"><span>Music volume</span><input id="set-music-vol" type="range" min="0" max="100" value="40"></label>
+        <label class="set-row"><span>Auto-fire</span><button id="set-autofire" class="btn sm">ON</button></label>
+        <label class="set-row"><span>Screen shake</span><button id="set-shake" class="btn sm">ON</button></label>
+        <label class="set-row"><span>Graphics quality</span><button id="set-quality" class="btn sm">HIGH</button></label>
+        <label class="set-row"><span>Reduced motion</span><button id="set-reduced" class="btn sm">OFF</button></label>
+      </div>
+      <button id="btn-tutorial-again" class="btn">📖 Show tutorial again</button>
+      <button id="btn-reset-save" class="btn danger">🗑️ Reset all save data</button>
+      <button id="btn-settings-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ HOW TO PLAY ============ -->
+    <div id="screen-howto" class="screen hidden">
+      <h2 class="screen-title">❔ HOW TO PLAY</h2>
+      <div class="howto">
+        <p><strong>Move:</strong> WASD / Arrow keys, or the left virtual joystick on touch.</p>
+        <p><strong>Fire:</strong> Hold Space or the FIRE button. Auto-fire can be turned on in Settings.</p>
+        <p><strong>Abilities:</strong> Keys 1 / 2 / 3 or the on-screen buttons — EMP stuns, Nova Bomb deals huge damage, Time Dilation slows enemies.</p>
+        <p><strong>Pause:</strong> P or Esc. <strong>Mute:</strong> M.</p>
+        <p><strong>Power-ups:</strong> 🚀 Rapid Fire · ✖️ Damage ×2 · ❤️ Repair +30 HP · 🛡️ Shield +40 · ⚡ Speed Boost.</p>
+        <p><strong>Goal:</strong> Clear waves, beat bosses, earn credits, upgrade your ship. You have 3 lives per run. HP 0 loses a life.</p>
+        <p><strong>Tip:</strong> Shields absorb damage first. Save Nova Bomb for bosses.</p>
+      </div>
+      <button id="btn-howto-tutorial" class="btn">📖 Show tutorial</button>
+      <button id="btn-howto-back" class="btn ghost">‹ Back</button>
+    </div>
+
+    <!-- ============ PAUSE ============ -->
+    <div id="screen-pause" class="screen overlay hidden">
+      <h2 class="screen-title">⏸ PAUSED</h2>
+      <div class="menu-btns">
+        <button id="btn-resume" class="btn primary">▶ RESUME</button>
+        <button id="btn-restart" class="btn">↻ RESTART RUN</button>
+        <button id="btn-pause-settings" class="btn">⚙️ SETTINGS</button>
+        <button id="btn-quit" class="btn danger">✖ QUIT TO MENU</button>
+      </div>
+    </div>
+
+    <!-- ============ STAGE CLEAR ============ -->
+    <div id="screen-stageclear" class="screen overlay hidden">
+      <h2 class="screen-title">✅ <span id="sc-title">STAGE 1 CLEAR!</span></h2>
+      <div id="sc-stats" class="stats"></div>
+      <div class="menu-btns">
+        <button id="btn-next-stage" class="btn primary">➡ NEXT STAGE</button>
+        <button id="btn-sc-menu" class="btn ghost">✖ MENU</button>
+      </div>
+    </div>
+
+    <!-- ============ GAME OVER ============ -->
+    <div id="screen-gameover" class="screen overlay hidden">
+      <h2 class="screen-title">💥 <span id="go-title">GAME OVER</span></h2>
+      <div class="stats">
+        <div>Final Score: <strong id="go-score">0</strong></div>
+        <div>Credits earned: <strong id="go-credits">0</strong></div>
+        <div>Best: <strong id="go-best">0</strong></div>
+      </div>
+      <div class="panel hs-panel"><h3>🏅 TOP PILOTS</h3><div id="go-highscores" class="highscores"></div></div>
+      <div class="menu-btns">
+        <button id="btn-go-restart" class="btn primary">↻ PLAY AGAIN</button>
+        <button id="btn-go-menu" class="btn ghost">✖ MENU</button>
+      </div>
+    </div>
+
+    <!-- ============ VICTORY ============ -->
+    <div id="screen-victory" class="screen overlay hidden">
+      <h2 class="screen-title">🌟 GALAXY SAVED!</h2>
+      <p class="tagline">You defeated the Void Leviathan and the galaxy is safe. Legendary piloting!</p>
+      <div class="stats">
+        <div>Final Score: <strong id="vic-score">0</strong></div>
+        <div>Credits earned: <strong id="vic-credits">0</strong></div>
+      </div>
+      <div class="menu-btns">
+        <button id="btn-vic-again" class="btn primary">↻ PLAY AGAIN</button>
+        <button id="btn-vic-menu" class="btn ghost">✖ MENU</button>
+      </div>
+    </div>
+
+    <!-- ============ TUTORIAL ============ -->
+    <div id="tutorial-overlay" class="screen overlay hidden">
+      <div class="panel tut-panel">
+        <h2 class="screen-title">📖 TUTORIAL <span id="tut-step">1 / 4</span></h2>
+        <div id="tut-text"></div>
+        <div class="tut-nav">
+          <button id="btn-tut-prev" class="btn sm">‹ Prev</button>
+          <button id="btn-tut-next" class="btn sm primary">Next ›</button>
+          <button id="btn-tut-done" class="btn sm">Got it ✓</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="banner" class="banner hidden"></div>
+    <div id="toasts" class="toasts"></div>
+
+    <!-- Ownership lock (shown by the gate script when the account does not own the game) -->
+    <div id="lock" class="overlay hidden">
+      <div class="logo">GALAXY<span>DEFENDER</span></div>
+      <p class="lock-sub">This game costs 30 Diamonds to unlock — buy once, play forever.</p>
+      <a class="btn primary" href="../">💎 Buy on the Hub</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var SUPABASE_URL = "https://wbnllmrosehgdwqqwfgd.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_GdfRPeymhpIxb4M4bhbS6Q_mizvMA06";
+  function locked() { document.getElementById("lock").classList.remove("hidden"); var m = document.getElementById("menu"); if (m) m.classList.add("hidden"); }
+  function loadGame() { var s = document.createElement("script"); s.src = "game.js"; document.body.appendChild(s); }
+  var u = "";
+  try { u = JSON.parse(localStorage.getItem("gg_shop_user") || '""') || ""; } catch (e) {}
+  if (!u) { locked(); return; }
+  fetch(SUPABASE_URL + "/rest/v1/profiles?username=eq." + encodeURIComponent(String(u).toLowerCase()) + "&select=owned", { headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY } })
+    .then(function (r) { return r.json(); }).then(function (rows) {
+      var owned = Array.isArray(rows) && rows.length && Array.isArray(rows[0].owned) && rows[0].owned.indexOf("galaxy-defender") !== -1;
+      if (owned) loadGame(); else locked();
+    }).catch(function () { locked(); });
+})();
+</script>
+</body>
+</html>
