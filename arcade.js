@@ -20,6 +20,12 @@
       scoreLabel: "Best score"
     }
   ];
+  var AVATARS = [
+    { id: "racer", src: "img/avatars/avatar-racer.svg", label: "Racer" },
+    { id: "ninja", src: "img/avatars/avatar-ninja.svg", label: "Ninja cat" },
+    { id: "car", src: "img/avatars/avatar-car.svg", label: "Sports car" },
+    { id: "badge", src: "img/avatars/avatar-badge.svg", label: "Police badge" }
+  ];
   var SCORE_KEYS = ["policeChaseBest", "dinoHi", "alienDefenseBest"]; // legacy keys cleared by "reset best scores"
 
   /* ---------------- storage helpers ---------------- */
@@ -46,7 +52,9 @@
     },
     set anim(v) { lsSet("gg_anim", !!v); },
     get compact() { return lsGet("gg_compact", false) === true; },
-    set compact(v) { lsSet("gg_compact", !!v); }
+    set compact(v) { lsSet("gg_compact", !!v); },
+    get avatar() { var a = lsGet("gg_avatar", ""); return AVATARS.some(function (x) { return x.id === a; }) ? a : ""; },
+    set avatar(v) { lsSet("gg_avatar", String(v)); }
   };
 
   function gameById(id) { for (var i = 0; i < GAMES.length; i++) if (GAMES[i].id === id) return GAMES[i]; return null; }
@@ -272,13 +280,32 @@
   $("sort").addEventListener("change", function () { currentSort = $("sort").value; renderLibrary(); });
 
   /* ---------------- profile ---------------- */
+  function currentAvatar() { return AVATARS.filter(function (x) { return x.id === store.avatar; })[0] || null; }
+  function renderAvatars() {
+    var a = currentAvatar();
+    var initial = (store.name.trim()[0] || "P").toUpperCase();
+    var pa = $("prof-avatar"), ab = $("avatar-btn");
+    if (a) {
+      pa.innerHTML = '<img src="' + a.src + '" alt="Profile picture">';
+      pa.classList.add("has-img");
+      ab.innerHTML = '<img src="' + a.src + '" alt="">';
+      ab.classList.add("has-img");
+    } else {
+      pa.textContent = initial; pa.classList.remove("has-img");
+      ab.innerHTML = '<span id="avatar-initial">' + esc(initial) + "</span>";
+      ab.classList.remove("has-img");
+    }
+    $("avatar-presets").innerHTML =
+      '<button class="avatar-opt' + (a ? "" : " is-active") + '" data-av="" aria-label="Use initial letter"><span>' + esc(initial) + "</span></button>" +
+      AVATARS.map(function (x) {
+        return '<button class="avatar-opt' + (a && a.id === x.id ? " is-active" : "") + '" data-av="' + x.id + '" aria-label="' + esc(x.label) + '"><img src="' + x.src + '" alt=""></button>';
+      }).join("");
+  }
   function renderProfile() {
     var name = store.name;
     $("prof-name").textContent = name;
     $("menu-username").textContent = name;
-    var initial = (name.trim()[0] || "P").toUpperCase();
-    $("prof-avatar").textContent = initial;
-    $("avatar-initial").textContent = initial;
+    renderAvatars();
 
     function mini(g, extra) {
       return '<a class="mini-item" href="' + g.route + '" data-play="' + g.id + '"><img src="' + g.cover + '" alt=""><span>' + esc(g.title) + "</span>" + (extra || "") + "</a>";
@@ -296,6 +323,13 @@
     $("name-editor").hidden = false;
     $("name-input").value = store.name;
     $("name-input").focus(); $("name-input").select();
+  });
+  $("avatar-presets").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-av]") : null;
+    if (!b) return;
+    store.avatar = b.getAttribute("data-av");
+    renderAvatars();
+    toast("Profile picture updated");
   });
   function closeNameEditor() { $("name-editor").hidden = true; }
   $("name-cancel").addEventListener("click", closeNameEditor);

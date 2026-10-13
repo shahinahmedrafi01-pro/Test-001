@@ -435,3 +435,18 @@ body.side-compact .nav-item { justify-content: center; padding: 12px 0; }
 body.no-anim *, body.no-anim *::before, body.no-anim *::after {
   animation: none !important; transition: none !important;
 }
+
+/* ---------- avatar presets ---------- */
+.avatar-pick { margin: 4px 0 18px; }
+.avatar-pick h4 { margin: 0 0 10px; }
+.avatar-presets { display: flex; gap: 10px; flex-wrap: wrap; }
+.avatar-opt {
+  width: 56px; height: 56px; border-radius: 50%; padding: 0; cursor: pointer;
+  border: 2px solid var(--line); background: var(--surface2);
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.avatar-opt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-opt span { font-size: 22px; font-weight: 800; color: var(--accent); }
+.avatar-opt.is-active { border-color: var(--accent); box-shadow: 0 0 10px rgba(34,211,238,0.45); }
+.avatar-btn.has-img, .prof-avatar.has-img { padding: 0; overflow: hidden; }
+.avatar-btn.has-img img, .prof-avatar.has-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
