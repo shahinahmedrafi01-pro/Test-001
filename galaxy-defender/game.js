@@ -161,7 +161,15 @@
         return;
       }
     }
-    while (box.children.length >= 3) dismissToast(box.children[0]);
+    /* Cap: drop the oldest toast. Remove it SYNCHRONOUSLY — dismissToast
+       only fades first and removes 300ms later, so calling it in a loop
+       on an already-fading toast spins forever (frozen tab). Each pass
+       below removes exactly one child, so the loop always terminates. */
+    while (box.children.length >= 3) {
+      var old = box.children[0];
+      if (old._timer) clearTimeout(old._timer);
+      if (old.parentNode) old.parentNode.removeChild(old);
+    }
     var t = document.createElement("div");
     t.className = "toast"; t.textContent = msg;
     t.addEventListener("click", function () { dismissToast(t); });
