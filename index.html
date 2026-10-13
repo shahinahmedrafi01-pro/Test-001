@@ -2,67 +2,256 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rafi's Mini Arcade</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>GitHub Games — Discover. Play. Repeat.</title>
+<meta name="description" content="GitHub Games — a personal browser gaming platform. Discover. Play. Repeat.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="arcade.css">
 </head>
 <body>
-<div class="starfield" aria-hidden="true"></div>
-<header class="site-header">
-  <h1>RAFI'S <span class="neon">MINI&nbsp;ARCADE</span></h1>
-  <p class="tagline">Pick a game. Beat your best.</p>
-</header>
+<div id="app">
 
-<main class="cards">
-  <article class="card featured">
-    <div class="thumb">
-      <svg viewBox="0 0 300 150" role="img" aria-label="Police Chase thumbnail">
-        <rect width="300" height="150" fill="#0b0b18"/>
-        <g fill="#1e2a4a">
-          <rect x="52" y="10" width="10" height="22"/><rect x="52" y="60" width="10" height="22"/><rect x="52" y="110" width="10" height="22"/>
-          <rect x="238" y="25" width="10" height="22"/><rect x="238" y="75" width="10" height="22"/><rect x="238" y="125" width="10" height="22"/>
-        </g>
-        <rect x="90" y="0" width="120" height="150" fill="#23232e"/>
-        <rect x="87" y="0" width="3" height="150" fill="#22d3ee"/>
-        <rect x="210" y="0" width="3" height="150" fill="#e879f9"/>
-        <g fill="rgba(255,255,255,0.55)">
-          <rect x="128" y="6" width="4" height="26"/><rect x="128" y="56" width="4" height="26"/><rect x="128" y="106" width="4" height="26"/>
-          <rect x="168" y="6" width="4" height="26"/><rect x="168" y="56" width="4" height="26"/><rect x="168" y="106" width="4" height="26"/>
-        </g>
-        <g>
-          <rect x="100" y="16" width="26" height="42" fill="#3b82f6"/>
-          <rect x="104" y="24" width="18" height="8" fill="#0f172a"/>
-          <rect x="104" y="52" width="18" height="6" fill="#1e3a8a"/>
-        </g>
-        <g>
-          <rect x="140" y="44" width="28" height="46" fill="#ef2d2d"/>
-          <rect x="150" y="44" width="8" height="46" fill="#f8fafc"/>
-          <rect x="144" y="52" width="20" height="9" fill="#0f172a"/>
-          <rect x="144" y="72" width="20" height="8" fill="#7f1d1d"/>
-          <rect x="142" y="86" width="7" height="4" fill="#fef9c3"/>
-          <rect x="159" y="86" width="7" height="4" fill="#fef9c3"/>
-        </g>
-        <g>
-          <rect x="140" y="102" width="28" height="44" fill="#111827"/>
-          <rect x="140" y="118" width="28" height="12" fill="#f8fafc"/>
-          <rect x="144" y="108" width="20" height="8" fill="#0f172a"/>
-          <rect x="142" y="98" width="11" height="6" fill="#ef4444"/>
-          <rect x="155" y="98" width="11" height="6" fill="#3b82f6"/>
-          <rect x="142" y="142" width="6" height="4" fill="#ef4444"/>
-          <rect x="160" y="142" width="6" height="4" fill="#ef4444"/>
-        </g>
-      </svg>
+  <!-- ============ SIDEBAR (desktop) / DRAWER (mobile) ============ -->
+  <aside id="sidebar" aria-label="Main navigation">
+    <div class="side-brand">
+      <span class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#818cf8"/></linearGradient></defs><rect x="2" y="2" width="28" height="28" rx="8" fill="url(#lg)"/><path d="M13 10.5v11l9-5.5z" fill="#0b0e14"/></svg>
+      </span>
+      <span class="logo-text"><strong>GitHub Games</strong><small>Discover. Play. Repeat.</small></span>
+      <button id="drawer-close" class="icon-btn only-mobile" aria-label="Close menu">✕</button>
     </div>
-    <h2>Police Chase</h2>
-    <p class="desc">Outrun the cops, dodge the traffic. How long can you survive?</p>
-    <p class="best">BEST <span id="best-police">0</span></p>
-    <a class="play-btn" href="police-chase/">PLAY</a>
-  </article>
-</main>
+    <nav class="side-nav">
+      <button class="nav-item is-active" data-view="home"><span class="ni">⌂</span><span class="nl">Home</span></button>
+      <button class="nav-item" data-view="library"><span class="ni">▦</span><span class="nl">Game Library</span></button>
+      <button class="nav-item" data-view="categories"><span class="ni">◫</span><span class="nl">Categories</span></button>
+      <button class="nav-item" data-view="favorites"><span class="ni">★</span><span class="nl">Favorites</span><span class="nbadge" id="fav-count" hidden></span></button>
+      <button class="nav-item" data-view="recent"><span class="ni">◷</span><span class="nl">Recently Played</span></button>
+    </nav>
+    <div class="side-foot">
+      <button class="nav-item" data-view="profile"><span class="ni">◯</span><span class="nl">Profile</span></button>
+      <button class="nav-item" data-view="settings"><span class="ni">⚙</span><span class="nl">Settings</span></button>
+      <button id="side-collapse" class="nav-item only-desktop" aria-label="Collapse sidebar"><span class="ni">«</span><span class="nl">Collapse</span></button>
+    </div>
+  </aside>
+  <div id="backdrop" hidden></div>
 
-<footer>
-  <p>Scores are saved on this device · More games coming soon</p>
-</footer>
+  <!-- ============ MAIN COLUMN ============ -->
+  <div class="main-col">
+    <header id="topbar">
+      <button id="hamburger" class="icon-btn only-mobile" aria-label="Open menu">☰</button>
+      <span class="logo-mark tb-logo only-mobile" aria-hidden="true">
+        <svg viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="8" fill="#22d3ee"/><path d="M13 10.5v11l9-5.5z" fill="#0b0e14"/></svg>
+      </span>
+      <div class="search-wrap">
+        <span class="search-ic" aria-hidden="true">⌕</span>
+        <input id="search" type="search" placeholder="Search games…" autocomplete="off" aria-label="Search games">
+      </div>
+      <div class="top-actions">
+        <button id="avatar-btn" class="avatar-btn" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">
+          <span id="avatar-initial">P</span>
+        </button>
+        <div id="avatar-menu" class="menu" role="menu" hidden>
+          <div class="menu-head"><strong id="menu-username">Player</strong><small>GitHub Games</small></div>
+          <button role="menuitem" data-goto="profile">◯&nbsp; Profile</button>
+          <button role="menuitem" data-goto="settings">⚙&nbsp; Settings</button>
+          <button role="menuitem" id="menu-about">ⓘ&nbsp; About</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="views">
+      <!-- HOME -->
+      <section class="view is-active" id="view-home" aria-label="Home">
+        <div id="featured" class="featured">
+          <img class="featured-bg" src="img/cover-police-chase.jpg" alt="" aria-hidden="true">
+          <div class="featured-shade"></div>
+          <div class="featured-body">
+            <span class="kicker">★ Featured</span>
+            <h2>Police Chase</h2>
+            <p>Outrun the cops, dodge the traffic. How long can you survive?</p>
+            <div class="featured-row">
+              <a class="btn-play big" href="police-chase/" data-play="police-chase">▶&nbsp; Play Now</a>
+              <button class="btn-ghost" data-info="police-chase">ⓘ Details</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec-head"><h3>Recently Played</h3><button class="link" data-goto="recent">View all →</button></div>
+        <div id="home-recent" class="hrow"></div>
+
+        <div class="sec-head"><h3>Game Library</h3><button class="link" data-goto="library">View all →</button></div>
+        <div id="home-grid" class="grid"></div>
+      </section>
+
+      <!-- LIBRARY -->
+      <section class="view" id="view-library" aria-label="Game Library">
+        <div class="sec-head"><h3>Game Library</h3>
+          <label class="sort-wrap">Sort
+            <select id="sort" aria-label="Sort games">
+              <option value="name">Name A–Z</option>
+              <option value="recent">Recently played</option>
+            </select>
+          </label>
+        </div>
+        <div id="lib-grid" class="grid"></div>
+        <div id="lib-empty" class="empty" hidden>
+          <div class="empty-ic">🎮</div>
+          <p>No games match your search.</p>
+          <button class="btn-ghost" id="lib-clear">Clear search</button>
+        </div>
+      </section>
+
+      <!-- CATEGORIES -->
+      <section class="view" id="view-categories" aria-label="Categories">
+        <div class="sec-head"><h3>Browse by Category</h3></div>
+        <div id="cat-chips" class="chips"></div>
+        <div id="cat-grid" class="grid"></div>
+      </section>
+
+      <!-- FAVORITES -->
+      <section class="view" id="view-favorites" aria-label="Favorites">
+        <div class="sec-head"><h3>Favorites</h3></div>
+        <div id="fav-grid" class="grid"></div>
+        <div id="fav-empty" class="empty" hidden>
+          <div class="empty-ic">★</div>
+          <p>No favorites yet.</p>
+          <p class="dim">Tap the ☆ on any game to pin it here.</p>
+          <button class="btn-ghost" data-goto="library">Browse games</button>
+        </div>
+      </section>
+
+      <!-- RECENTLY PLAYED -->
+      <section class="view" id="view-recent" aria-label="Recently Played">
+        <div class="sec-head"><h3>Recently Played</h3></div>
+        <div id="recent-list" class="recent-list"></div>
+        <div id="recent-empty" class="empty" hidden>
+          <div class="empty-ic">◷</div>
+          <p>Nothing here yet.</p>
+          <p class="dim">Games you play will show up here.</p>
+          <button class="btn-ghost" data-goto="library">Browse games</button>
+        </div>
+      </section>
+
+      <!-- PROFILE -->
+      <section class="view" id="view-profile" aria-label="Profile">
+        <div class="sec-head"><h3>Profile</h3></div>
+        <div class="panel profile-panel">
+          <div class="prof-top">
+            <div class="prof-avatar" id="prof-avatar">P</div>
+            <div class="prof-id">
+              <div class="prof-name-row">
+                <strong id="prof-name">Player</strong>
+                <button class="icon-btn" id="name-edit" aria-label="Edit display name">✎</button>
+              </div>
+              <small class="dim">GitHub Games player</small>
+            </div>
+          </div>
+          <div id="name-editor" class="name-editor" hidden>
+            <input id="name-input" maxlength="24" aria-label="Display name">
+            <button class="btn-play sm" id="name-save">Save</button>
+            <button class="btn-ghost sm" id="name-cancel">Cancel</button>
+          </div>
+          <div class="prof-cols">
+            <div>
+              <h4>Favorite Games</h4>
+              <div id="prof-favs" class="mini-list"></div>
+            </div>
+            <div>
+              <h4>Recently Played</h4>
+              <div id="prof-recent" class="mini-list"></div>
+            </div>
+          </div>
+          <h4>Best Scores</h4>
+          <div id="prof-scores" class="score-list"></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="view" id="view-settings" aria-label="Settings">
+        <div class="sec-head"><h3>Settings</h3></div>
+        <div class="panel settings-panel">
+          <div class="set-group">
+            <h4>Appearance</h4>
+            <div class="set-row"><span>Accent color</span>
+              <div class="swatches" role="radiogroup" aria-label="Accent color">
+                <button class="sw cyan" data-accent="cyan" aria-label="Cyan"></button>
+                <button class="sw blue" data-accent="blue" aria-label="Blue"></button>
+                <button class="sw violet" data-accent="violet" aria-label="Violet"></button>
+              </div>
+            </div>
+            <div class="set-row"><span>Compact sidebar</span>
+              <button class="toggle" id="tgl-sidebar" role="switch" aria-checked="false" aria-label="Compact sidebar"><span class="knob"></span></button>
+            </div>
+          </div>
+          <div class="set-group">
+            <h4>Motion</h4>
+            <div class="set-row"><span>Animations</span>
+              <button class="toggle" id="tgl-anim" role="switch" aria-checked="true" aria-label="Animations"><span class="knob"></span></button>
+            </div>
+            <p class="dim sm">Turn off to reduce motion across the interface.</p>
+          </div>
+          <div class="set-group danger-zone">
+            <h4>Data &amp; Privacy</h4>
+            <p class="dim sm">Everything is stored only in this browser.</p>
+            <div class="set-row"><span>Reset best scores</span><button class="btn-ghost sm danger" id="btn-reset-scores">Reset</button></div>
+            <div class="set-row"><span>Clear recently played</span><button class="btn-ghost sm danger" id="btn-clear-recent">Clear</button></div>
+            <div class="set-row"><span>Clear favorites</span><button class="btn-ghost sm danger" id="btn-clear-favs">Clear</button></div>
+          </div>
+          <div class="set-group">
+            <h4>About</h4>
+            <p><strong>GitHub Games</strong> — Discover. Play. Repeat.</p>
+            <p class="dim">This is made for everyone.</p>
+            <p class="dim sm">Hub v2.0 · Games launch in their own pages and keep their own saved data.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- game details modal -->
+<div id="info-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="im-title">
+  <div class="modal-card">
+    <button class="icon-btn modal-x" data-close aria-label="Close">✕</button>
+    <div class="im-head">
+      <img id="im-cover" src="" alt="">
+      <div><h3 id="im-title"></h3><div id="im-genre" class="chips sm"></div></div>
+    </div>
+    <p id="im-desc"></p>
+    <h4>Controls</h4><p id="im-controls" class="dim"></p>
+    <h4>Features</h4><ul id="im-features" class="feat"></ul>
+    <h4>Credits</h4><p id="im-credits" class="dim sm"></p>
+    <div class="im-actions">
+      <a class="btn-play big" id="im-play" href="#" data-play="">▶&nbsp; Play</a>
+    </div>
+  </div>
+</div>
+
+<!-- about modal -->
+<div id="about-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="ab-title">
+  <div class="modal-card narrow">
+    <button class="icon-btn modal-x" data-close aria-label="Close">✕</button>
+    <h3 id="ab-title">About GitHub Games</h3>
+    <p><strong>GitHub Games</strong> — Discover. Play. Repeat.</p>
+    <p class="dim">This is made for everyone.</p>
+    <p class="dim sm">A personal browser gaming platform. Your favorites, recent games and settings live only in this browser.</p>
+  </div>
+</div>
+
+<!-- confirm modal -->
+<div id="confirm-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="cf-title">
+  <div class="modal-card narrow">
+    <h3 id="cf-title"></h3>
+    <p id="cf-msg" class="dim"></p>
+    <div class="im-actions">
+      <button class="btn-ghost" data-close>Cancel</button>
+      <button class="btn-play danger" id="cf-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
 <script src="arcade.js"></script>
 </body>
 </html>
