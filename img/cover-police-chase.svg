@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#05070d"/>
+      <stop offset="0.55" stop-color="#0a1428"/>
+      <stop offset="1" stop-color="#0e1e3a"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#131a28"/>
+      <stop offset="1" stop-color="#05070c"/>
+    </linearGradient>
+    <linearGradient id="carRed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f87171"/>
+      <stop offset="0.5" stop-color="#dc2626"/>
+      <stop offset="1" stop-color="#7f1d1d"/>
+    </linearGradient>
+    <linearGradient id="copBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#374151"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <radialGradient id="glowR" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ef4444" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3b82f6" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="tailGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fca5a5" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="trail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef4444" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ef4444" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+
+  <!-- sky -->
+  <rect width="600" height="800" fill="url(#sky)"/>
+
+  <!-- distant city -->
+  <g opacity="0.9">
+    <rect x="20" y="240" width="46" height="130" fill="#0b1220"/>
+    <rect x="74" y="210" width="38" height="160" fill="#0d1626"/>
+    <rect x="120" y="250" width="54" height="120" fill="#0b1220"/>
+    <rect x="430" y="220" width="42" height="150" fill="#0d1626"/>
+    <rect x="480" y="250" width="56" height="120" fill="#0b1220"/>
+    <rect x="544" y="205" width="36" height="165" fill="#0d1626"/>
+    <g fill="#22d3ee" opacity="0.75">
+      <rect x="28" y="252" width="8" height="6"/><rect x="44" y="270" width="8" height="6"/><rect x="28" y="300" width="8" height="6"/>
+      <rect x="82" y="224" width="7" height="5"/><rect x="96" y="244" width="7" height="5"/><rect x="82" y="280" width="7" height="5"/>
+      <rect x="130" y="262" width="9" height="6"/><rect x="150" y="290" width="9" height="6"/>
+      <rect x="438" y="234" width="7" height="5"/><rect x="452" y="262" width="7" height="5"/>
+      <rect x="490" y="264" width="9" height="6"/><rect x="510" y="296" width="9" height="6"/>
+      <rect x="550" y="220" width="7" height="5"/><rect x="562" y="250" width="7" height="5"/>
+    </g>
+    <g fill="#fbbf24" opacity="0.6">
+      <rect x="44" y="252" width="8" height="6"/><rect x="28" y="330" width="8" height="6"/>
+      <rect x="96" y="224" width="7" height="5"/><rect x="438" y="300" width="7" height="5"/>
+      <rect x="510" y="264" width="9" height="6"/><rect x="550" y="290" width="7" height="5"/>
+    </g>
+  </g>
+  <!-- horizon glow -->
+  <rect x="0" y="360" width="600" height="26" fill="#22d3ee" opacity="0.10"/>
+
+  <!-- highway -->
+  <polygon points="180,386 420,386 600,800 0,800" fill="url(#road)"/>
+  <polygon points="180,386 420,386 600,800 0,800" fill="none" stroke="#1f2b45" stroke-width="3"/>
+  <!-- lane dashes (perspective) -->
+  <g fill="#3b4a6b">
+    <rect x="294" y="420" width="12" height="26"/>
+    <rect x="288" y="480" width="24" height="44"/>
+    <rect x="280" y="570" width="40" height="70"/>
+    <rect x="268" y="690" width="64" height="100"/>
+  </g>
+  <!-- road edge lines -->
+  <polygon points="180,386 196,386 60,800 0,800" fill="#22d3ee" opacity="0.14"/>
+  <polygon points="404,386 420,386 600,800 540,800" fill="#22d3ee" opacity="0.14"/>
+
+  <!-- speed lines -->
+  <g stroke="#9fd8ff" stroke-width="3" opacity="0.35" stroke-linecap="round">
+    <line x1="60" y1="480" x2="150" y2="560"/>
+    <line x1="540" y1="470" x2="450" y2="550"/>
+    <line x1="40" y1="620" x2="170" y2="700"/>
+    <line x1="560" y1="630" x2="430" y2="710"/>
+    <line x1="100" y1="380" x2="170" y2="440"/>
+    <line x1="500" y1="380" x2="430" y2="440"/>
+  </g>
+
+  <!-- police car (upper, chasing) -->
+  <g>
+    <ellipse cx="300" cy="470" rx="150" ry="60" fill="url(#glowR)" opacity="0.5"/>
+    <ellipse cx="300" cy="470" rx="150" ry="60" fill="url(#glowB)" opacity="0.5"/>
+    <rect x="218" y="428" width="164" height="58" rx="14" fill="url(#copBody)"/>
+    <rect x="238" y="436" width="124" height="20" rx="6" fill="#0b1220"/>
+    <!-- light bar -->
+    <rect x="252" y="418" width="96" height="16" rx="7" fill="#111827"/>
+    <rect x="256" y="420" width="42" height="12" rx="5" fill="#ef4444"/>
+    <rect x="302" y="420" width="42" height="12" rx="5" fill="#3b82f6"/>
+    <ellipse cx="277" cy="426" rx="46" ry="26" fill="url(#glowR)"/>
+    <ellipse cx="323" cy="426" rx="46" ry="26" fill="url(#glowB)"/>
+    <!-- windshield / details -->
+    <rect x="238" y="436" width="124" height="20" rx="6" fill="#0e1626"/>
+    <rect x="246" y="440" width="50" height="12" rx="3" fill="#1d2c4d"/>
+    <rect x="304" y="440" width="50" height="12" rx="3" fill="#1d2c4d"/>
+    <rect x="228" y="470" width="144" height="8" rx="4" fill="#e5e7eb" opacity="0.85"/>
+    <circle cx="250" cy="492" r="14" fill="#0a0a0a"/><circle cx="250" cy="492" r="6" fill="#374151"/>
+    <circle cx="350" cy="492" r="14" fill="#0a0a0a"/><circle cx="350" cy="492" r="6" fill="#374151"/>
+  </g>
+
+  <!-- light trails from player -->
+  <polygon points="170,640 230,640 200,800 120,800" fill="url(#trail)"/>
+  <polygon points="370,640 430,640 480,800 400,800" fill="url(#trail)"/>
+
+  <!-- player sports car (lower, fleeing) -->
+  <g>
+    <ellipse cx="300" cy="700" rx="170" ry="46" fill="url(#tailGlow)" opacity="0.55"/>
+    <!-- body -->
+    <path d="M170 700 Q170 640 230 632 L250 600 Q260 588 300 588 Q340 588 350 600 L370 632 Q430 640 430 700 L430 730 Q430 748 410 748 L190 748 Q170 748 170 730 Z" fill="url(#carRed)"/>
+    <!-- cabin -->
+    <path d="M248 606 Q258 594 300 594 Q342 594 352 606 L362 630 L238 630 Z" fill="#0e1626"/>
+    <rect x="252" y="602" width="96" height="22" rx="8" fill="#1d2c4d" opacity="0.9"/>
+    <!-- spoiler -->
+    <rect x="196" y="636" width="208" height="14" rx="7" fill="#450a0a"/>
+    <rect x="206" y="650" width="14" height="26" fill="#450a0a"/>
+    <rect x="380" y="650" width="14" height="26" fill="#450a0a"/>
+    <!-- taillights -->
+    <rect x="196" y="700" width="72" height="20" rx="10" fill="#ef4444"/>
+    <rect x="332" y="700" width="72" height="20" rx="10" fill="#ef4444"/>
+    <ellipse cx="232" cy="710" rx="44" ry="20" fill="url(#tailGlow)"/>
+    <ellipse cx="368" cy="710" rx="44" ry="20" fill="url(#tailGlow)"/>
+    <!-- bumper + exhausts -->
+    <rect x="190" y="730" width="220" height="18" rx="9" fill="#1f2937"/>
+    <circle cx="250" cy="739" r="9" fill="#0a0a0a"/><circle cx="250" cy="739" r="4.5" fill="#6b7280"/>
+    <circle cx="350" cy="739" r="9" fill="#0a0a0a"/><circle cx="350" cy="739" r="4.5" fill="#6b7280"/>
+    <!-- wheels -->
+    <ellipse cx="196" cy="748" rx="26" ry="18" fill="#0a0a0a"/><circle cx="196" cy="748" r="8" fill="#4b5563"/>
+    <ellipse cx="404" cy="748" rx="26" ry="18" fill="#0a0a0a"/><circle cx="404" cy="748" r="8" fill="#4b5563"/>
+  </g>
+
+  <!-- rain streaks -->
+  <g stroke="#bcd7ff" stroke-width="2" opacity="0.22" stroke-linecap="round">
+    <line x1="120" y1="60" x2="100" y2="130"/><line x1="240" y1="30" x2="220" y2="100"/>
+    <line x1="380" y1="70" x2="360" y2="140"/><line x1="500" y1="40" x2="480" y2="110"/>
+    <line x1="180" y1="180" x2="160" y2="250"/><line x1="440" y1="170" x2="420" y2="240"/>
+  </g>
+
+  <!-- vignette -->
+  <rect width="600" height="800" fill="none" stroke="#000" stroke-width="60" opacity="0.35"/>
+</svg>

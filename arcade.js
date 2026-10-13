@@ -15,7 +15,7 @@
       features: ["5-lane endless highway", "Police pursuits & surges", "Nitro, Shield, Phase & Repair pickups", "UFO & helicopter events", "Best score saved on this device"],
       credits: "Original game built for this site.",
       route: "police-chase/",
-      cover: "img/cover-police-chase.jpg",
+      cover: "img/cover-police-chase.svg",
       scoreKey: "policeChaseBest",
       scoreLabel: "Best score"
     }
