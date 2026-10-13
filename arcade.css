@@ -473,6 +473,12 @@ body.no-anim *, body.no-anim *::before, body.no-anim *::after {
 .shop-user-row { display: flex; gap: 8px; }
 .shop-user-row input, #sh-username, #sh-trxid, #admin-key { background: var(--bg); border: 1px solid var(--line); color: inherit; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
 .shop-user-row input { width: 150px; }
+.daily-claim { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin: 14px 0; background: linear-gradient(135deg, rgba(34,211,238,.10), rgba(129,140,248,.10)); }
+.dc-title { font-weight: 800; font-size: 16px; }
+.dc-sub { color: var(--dim); font-size: 13px; margin-top: 2px; }
+.dc-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dc-count { font-variant-numeric: tabular-nums; font-size: 14px; color: var(--dim); }
+#daily-claim-btn:disabled { opacity: .5; cursor: not-allowed; }
 #sh-username, #sh-trxid, #sh-phone, #admin-key { width: 100%; margin: 6px 0 4px; }
 .bkash-box { border: 1px dashed var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; text-align: center; }
 .bkash-num { font-size: 24px; font-weight: 800; letter-spacing: 1px; margin: 6px 0; }
