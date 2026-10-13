@@ -463,6 +463,8 @@
       "order not pending": "This order is no longer pending.",
       "order not found": "Order not found.",
       "not admin": "Admin login required.",
+      "daily claim not ready": "Daily Claim not ready yet — check the countdown.",
+      "daily claim unavailable": "Daily Claim is still being set up — try again soon.",
       "network": "Could not reach the server — check your connection."
     };
     return map[err] || "Something went wrong — please try again.";
@@ -477,9 +479,16 @@
   function applyProfile(p) {
     currentProfile = p;
     if (p && p.username) store.shopUser = p.username;
+    /* last_daily_claim arrives as snake_case from Supabase; keep the
+       previous value when the response does not carry it (e.g. the
+       buy_game reply), so the Daily Claim countdown never blanks. */
+    if (p && ("last_daily_claim" in p || "lastDailyClaim" in p)) {
+      p.lastDailyClaim = p.last_daily_claim !== undefined ? p.last_daily_claim : p.lastDailyClaim;
+    }
     syncDiamondDisplays();
     syncFeatured();
     refreshDynamic();
+    updateDailyClaim();
     if (buyTarget) renderBuyModal();
   }
   function loadProfile(username) {
@@ -489,7 +498,13 @@
       if (!res.ok || !Array.isArray(res.data) || !res.data.length) return null;
       var p = res.data[0];
       p.owned = Array.isArray(p.owned) ? p.owned : [];
-      return p;
+      /* Daily Claim timestamp: separate best-effort fetch so the
+         profile still loads if the migration has not run yet (the
+         column would not exist and a combined select would fail). */
+      return sbFetch("profiles?username=eq." + encodeURIComponent(u.toLowerCase()) + "&select=last_daily_claim").then(function (r2) {
+        p.lastDailyClaim = (r2.ok && Array.isArray(r2.data) && r2.data.length) ? r2.data[0].last_daily_claim : null;
+        return p;
+      });
     });
   }
   /* Username-only login: try to create the account (first save = +30
@@ -502,6 +517,7 @@
       if (res.ok) {
         var p = res.data;
         p.owned = Array.isArray(p.owned) ? p.owned : [];
+        p.lastDailyClaim = null; /* brand-new account: never claimed */
         applyProfile(p);
         toast("Welcome, " + p.username + "! +30 Diamonds bonus added.");
         return true;
@@ -594,7 +610,66 @@
         '<div class="pack-price">৳' + p.price + "</div>" +
         '<button class="btn-play" data-buy="' + p.id + '">Buy</button></div>';
     }).join("");
+    updateDailyClaim();
   }
+
+  /* ---------------- daily diamond claim ----------------
+     +10 Diamonds every 12 hours. The cooldown lives in Supabase
+     (last_daily_claim) and the claim_daily RPC enforces it, so it
+     is identical on every device. The countdown below is display
+     only — the server is the authority on whether a claim works. */
+  function dailyRemainingMs() {
+    if (!currentProfile || !currentProfile.lastDailyClaim) return 0;
+    var last = Date.parse(currentProfile.lastDailyClaim);
+    if (isNaN(last)) return 0;
+    return last + 12 * 3600 * 1000 - Date.now();
+  }
+  function fmtCountdown(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+  }
+  function updateDailyClaim() {
+    var btn = $("daily-claim-btn"), cd = $("daily-countdown");
+    if (!btn || !cd) return;
+    if (!currentProfile) {
+      btn.disabled = true; btn.textContent = "Claim +10 💎";
+      cd.textContent = "Create or load an account to claim.";
+      return;
+    }
+    var rem = dailyRemainingMs();
+    if (rem <= 0) {
+      btn.disabled = false; btn.textContent = "Claim +10 💎";
+      cd.textContent = "Ready — claim now!";
+    } else {
+      btn.disabled = true; btn.textContent = "Claim +10 💎";
+      cd.textContent = "Next claim in " + fmtCountdown(rem);
+    }
+  }
+  function claimDaily() {
+    if (!currentProfile) { toast("Create or load an account first."); return; }
+    var btn = $("daily-claim-btn");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true; btn.textContent = "Claiming…";
+    sbRpc("claim_daily", { p_username: store.shopUser }).then(function (res) {
+      if (!res.ok) {
+        /* Pre-migration: the RPC does not exist yet. */
+        if (res.error && res.error.indexOf("Could not find the function") !== -1) toast(friendlyShopError("daily claim unavailable"));
+        else toast(friendlyShopError(res.error));
+        updateDailyClaim();
+        return;
+      }
+      var p = res.data;
+      p.owned = Array.isArray(p.owned) ? p.owned : [];
+      applyProfile(p);
+      toast("+10 💎 Daily Claim added!");
+      updateDailyClaim();
+    });
+  }
+  var dcb = $("daily-claim-btn");
+  if (dcb) dcb.addEventListener("click", claimDaily);
+  /* Live countdown (1s). Cheap: touches one text node when it exists. */
+  setInterval(updateDailyClaim, 1000);
 
   var checkoutPkg = null;
   function openCheckout(id) {
