@@ -110,6 +110,23 @@ function startBot() {
       }
       // never relay anything containing the login command
       if (config.loginCommand && s.includes(config.loginCommand)) return;
+      // /msg (whisper) to the bot -> always notify the owner, even with no keyword.
+      // Format: "[RANK ~Name [RANK] -> me] message". Shares the mention cooldown.
+      if (/->\s*me\]/i.test(s)) {
+        var wName = senderName;
+        if (!wName) {
+          var wn = s.match(/~\s*([A-Za-z0-9_]{3,16})/);
+          if (wn) wName = wn[1];
+        }
+        var wText = s.replace(/^\[.*->\s*me\]\s*/i, '').trim() || s;
+        var nowW = Date.now();
+        if (config.discordOwnerId && nowW - lastMcMentionPingAt > 5 * 60 * 1000) {
+          lastMcMentionPingAt = nowW;
+          sendToDiscord(`<@${config.discordOwnerId}> 🔔 /msg from ${wName || 'someone'}: ${wText}`);
+          log(`Whisper (/msg) alert from ${wName || 'unknown'}.`);
+        }
+        return; // handled — don't relay whispers as public chat
+      }
       // Madara/Rafi/Admin mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
       // 5-minute cooldown for in-game mentions: no mention spam.
