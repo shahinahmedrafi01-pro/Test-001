@@ -112,10 +112,10 @@ function startBot() {
       if (config.loginCommand && s.includes(config.loginCommand)) return;
       // Madara/Rafi/Admin mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
-      // 10-minute cooldown for in-game mentions: no mention spam.
+      // 5-minute cooldown for in-game mentions: no mention spam.
       if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi') || s.toLowerCase().includes('admin'))) {
         const now = Date.now();
-        if (now - lastMcMentionPingAt > 10 * 60 * 1000) {
+        if (now - lastMcMentionPingAt > 5 * 60 * 1000) {
           lastMcMentionPingAt = now;
           sendToDiscord(`<@${config.discordOwnerId}> 🔔 Someone mentioned you on the server!`);
           log(`Mention alert (MC) from ${senderName}.`);
