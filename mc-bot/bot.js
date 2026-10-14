@@ -110,10 +110,10 @@ function startBot() {
       }
       // never relay anything containing the login command
       if (config.loginCommand && s.includes(config.loginCommand)) return;
-      // Madara/Rafi mention alert for in-game chat: ping the owner on Discord.
+      // Madara/Rafi/Admin mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
       // 10-minute cooldown for in-game mentions: no mention spam.
-      if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi'))) {
+      if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi') || s.toLowerCase().includes('admin'))) {
         const now = Date.now();
         if (now - lastMcMentionPingAt > 10 * 60 * 1000) {
           lastMcMentionPingAt = now;
@@ -422,10 +422,10 @@ async function startDiscord() {
     try {
       if (!msg || !msg.author || msg.author.bot) return;
       if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
-      // Madara mention alert: anyone typing "madara"/"madara_1ea" pings the owner.
+      // Madara/Admin mention alert: anyone typing "madara"/"madara_1ea"/"admin" pings the owner.
       // Checked before the owner-only gate so other people can call for him too.
       const contentLower = (msg.content || '').toLowerCase();
-      if (config.discordOwnerId && contentLower.includes('madara')) {
+      if (config.discordOwnerId && (contentLower.includes('madara') || contentLower.includes('admin'))) {
         const now = Date.now();
         if (now - lastMadaraPingAt > 60000) { // 60s cooldown against ping spam
           lastMadaraPingAt = now;
