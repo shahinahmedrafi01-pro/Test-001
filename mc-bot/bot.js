@@ -427,7 +427,7 @@ async function startDiscord() {
       const contentLower = (msg.content || '').toLowerCase();
       if (config.discordOwnerId && (contentLower.includes('madara') || contentLower.includes('admin'))) {
         const now = Date.now();
-        if (now - lastMadaraPingAt > 60000) { // 60s cooldown against ping spam
+        if (now - lastMadaraPingAt > 5 * 60 * 1000) { // 5-min cooldown against ping spam
           lastMadaraPingAt = now;
           await msg.reply(`<@${config.discordOwnerId}> — someone mentioned Madara! 👀`).catch(() => {});
           log('Madara mention alert sent.');
