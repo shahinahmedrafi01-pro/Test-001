@@ -4,7 +4,7 @@ const config = {
   host: process.env.MC_HOST || 'mc.havencraft.pro',
   port: parseInt(process.env.MC_PORT || '2566', 10),
   username: process.env.MC_USER || 'Madara_1ea',
-  loginCommand: process.env.MC_LOGIN_CMD || '',
+  loginCommand: (process.env.MC_LOGIN_CMD || '').trim(),
   // Discord bridge (optional - only used if DISCORD_MC_TOKEN is set)
   discordToken: process.env.DISCORD_MC_TOKEN || '',
   discordChannelId: process.env.DISCORD_CHANNEL_ID || '',
@@ -114,10 +114,7 @@ function startBot() {
       // Format: "[RANK ~Name [RANK] -> me] message". Shares the mention cooldown.
       if (/->\s*me\]/i.test(s)) {
         var wName = senderName;
-        if (!wName) {
-          var wn = s.match(/~\s*([A-Za-z0-9_]{3,16})/);
-          if (wn) wName = wn[1];
-        }
+        if (!wName) wName = whisperSender(s);
         var wText = s.replace(/^\[.*->\s*me\]\s*/i, '').trim() || s;
         var nowW = Date.now();
         if (config.discordOwnerId && nowW - lastMcMentionPingAt > 5 * 60 * 1000) {
@@ -126,6 +123,11 @@ function startBot() {
           log(`Whisper (/msg) alert from ${wName || 'unknown'}.`);
         }
         return; // handled — don't relay whispers as public chat
+      }
+      // AuthMe rejected the login -> tell the owner the password is wrong.
+      if (/wrong password|incorrect password|not registered|login failed/i.test(s)) {
+        log('AuthMe says the login failed (wrong password?).');
+        if (config.discordOwnerId) sendToDiscord(`<@${config.discordOwnerId}> ⚠️ MC login failed — wrong password? Please update the MC_LOGIN_CMD secret.`);
       }
       // Madara/Rafi/Admin mention alert for in-game chat: ping the owner on Discord.
       // Requires a known player sender so join/leave/system messages can't false-trigger.
@@ -385,6 +387,23 @@ function prettyRelay(s) {
     if (name) return `<${name}> ${m[2].trim()}`;
   }
   return clean.trim();
+}
+
+// Extract the sender name from a whisper like "[ELITE ~Zinedine_Zidane [RICH] -> me]".
+// Strips color codes and [RANK] tags, then takes the last username-like token.
+function whisperSender(s) {
+  try {
+    var clean = String(s || '').replace(/§[0-9a-fk-or]/gi, '');
+    var m = clean.match(/^\[(.*)->\s*me\]/i);
+    if (!m) return null;
+    var inner = m[1].replace(/\[[^\]]*\]/g, ' ');
+    var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/);
+    for (var i = toks.length - 1; i >= 0; i--) {
+      var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '');
+      if (/^[A-Za-z0-9_]{3,16}$/.test(t)) return t;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
 }
 
 // Resolve a chat packet sender UUID -> player name via the tab list.
