@@ -512,11 +512,16 @@ async function replyPlayerList(msg) {
     return;
   }
   const names = Object.keys(bot.players || {}).filter((n) => n !== bot.username).sort();
-  const reply = names.length
-    ? `Server ${names.length} online: ${names.join(', ')}`
+  const entries = names.map((n) => {
+    const p = bot.players[n];
+    const ping = p && typeof p.ping === 'number' ? p.ping : null;
+    return ping === null ? `${n}-?ping` : `${n}-${ping}ping`;
+  });
+  const reply = entries.length
+    ? `Server ${entries.length} online: ${entries.join(', ')}`
     : 'Server 0 online.';
   await msg.reply(reply.slice(0, 1900)).catch(() => {});
-  log(`Discord playerlist -> ${names.length} players.`);
+  log(`Discord playerlist -> ${entries.length} players.`);
 }
 
   discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
