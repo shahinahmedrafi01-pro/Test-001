@@ -487,3 +487,15 @@ body.no-anim *, body.no-anim *::before, body.no-anim *::after {
 .pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
 .pill.pend { background: rgba(251,191,36,0.15); color: #fbbf24; }
 .pill.done { background: rgba(74,222,128,0.15); color: #4ade80; }
+
+/* -------- custom diamond amount -------- */
+.custom-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin: 0 0 18px; background: rgba(255,255,255,0.02); }
+.custom-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; font-weight: 800; }
+.custom-row { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+.custom-row input[type="range"] { flex: 1; accent-color: #22d3ee; }
+.custom-row input[type="number"] { width: 120px; background: var(--bg); border: 1px solid var(--line); color: inherit; border-radius: 8px; padding: 8px 10px; font-size: 15px; }
+.custom-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.custom-chips .chip { background: var(--bg); border: 1px solid var(--line); color: inherit; border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.custom-chips .chip:hover { border-color: #22d3ee; }
+.custom-buy-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.custom-price { font-size: 24px; font-weight: 800; }

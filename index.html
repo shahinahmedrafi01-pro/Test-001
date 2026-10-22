@@ -157,6 +157,28 @@
             </div>
           </div>
           <div id="shop-packs" class="shop-packs"></div>
+          <div class="custom-card">
+            <div class="custom-head"><span>🛠️ Custom Amount</span><span class="dim sm">1,000 – 100,000 💎 &bull; bigger amount = cheaper per diamond</span></div>
+            <div class="custom-row">
+              <input id="custom-slider" type="range" min="1000" max="100000" step="100" value="1000" aria-label="Custom diamond amount (slider)">
+              <input id="custom-amount" type="number" min="1000" max="100000" step="100" value="1000" aria-label="Custom diamond amount">
+            </div>
+            <div class="custom-chips">
+              <button class="chip" data-custom="1000">1,000</button>
+              <button class="chip" data-custom="5000">5,000</button>
+              <button class="chip" data-custom="10000">10,000</button>
+              <button class="chip" data-custom="25000">25,000</button>
+              <button class="chip" data-custom="50000">50,000</button>
+              <button class="chip" data-custom="100000">100,000</button>
+            </div>
+            <div class="custom-buy-row">
+              <div>
+                <div id="custom-price" class="custom-price">৳910</div>
+                <div id="custom-rate" class="dim sm">৳0.91 per diamond — the packages' average rate</div>
+              </div>
+              <button class="btn-play" id="custom-buy">Buy Custom</button>
+            </div>
+          </div>
           <p class="dim sm">Pay with bKash Send Money (app or *247#), then enter your TrxID + phone number. Orders stay Pending until the payment is verified — then your Diamonds are added automatically.</p>
         </div>
       </section>

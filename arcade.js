@@ -460,6 +460,7 @@
       "invalid phone": "Invalid phone number — use 01XXXXXXXXX or +8801XXXXXXXXX.",
       "invalid username": "Username must be 2–24 characters.",
       "unknown package": "Unknown package — reload the page and try again.",
+      "custom amount must be 1000-100000": "Custom amount must be between 1,000 and 100,000 Diamonds.",
       "order not pending": "This order is no longer pending.",
       "order not found": "Order not found.",
       "not admin": "Admin login required.",
@@ -601,6 +602,19 @@
 
   function pkgById(id) { for (var i = 0; i < PACKAGES.length; i++) if (PACKAGES[i].id === id) return PACKAGES[i]; return null; }
 
+  /* -------- custom diamond purchases --------
+     Any amount from 1,000 to 100,000 diamonds, priced at the blended
+     average of the 4 packages above (900 taka / 989 diamonds =
+     0.91 taka/diamond) with volume tiers for bigger orders:
+       10,000+ -> 0.86/diamond (~5.5% off), 50,000+ -> 0.82 (~10% off).
+     Display only — place_custom_order() on the server recomputes the
+     exact same price, so the charged amount can never be faked. */
+  var CUSTOM_MIN = 1000, CUSTOM_MAX = 100000;
+  function customRate(d) { return (d >= 50000 ? 82 : d >= 10000 ? 86 : 91) / 100; }
+  /* Integer-poisha math so the displayed price always matches the
+     server's exact decimal rounding, taka for taka. */
+  function customPrice(d) { return Math.round(d * Math.round(customRate(d) * 100) / 100); }
+
   function renderShop() {
     syncDiamondDisplays();
     $("shop-user-input").value = store.shopUser;
@@ -672,10 +686,23 @@
   setInterval(updateDailyClaim, 1000);
 
   var checkoutPkg = null;
+  var checkoutCustom = null;
+  function coName() { return checkoutCustom ? ("Custom — " + checkoutCustom.diamonds.toLocaleString("en-US") + " Diamonds") : checkoutPkg.name; }
+  function coPrice() { return checkoutCustom ? checkoutCustom.price : checkoutPkg.price; }
   function openCheckout(id) {
     checkoutPkg = pkgById(id); if (!checkoutPkg) return;
-    $("sh-pack-name").textContent = checkoutPkg.name;
-    $("sh-pack-price").textContent = "৳" + checkoutPkg.price;
+    checkoutCustom = null;
+    $("sh-pack-name").textContent = coName();
+    $("sh-pack-price").textContent = "৳" + coPrice();
+    $("sh-username").value = store.shopUser;
+    $("sh-step1").hidden = false; $("sh-step2").hidden = true; $("sh-done").hidden = true;
+    openModal("shop-modal");
+  }
+  function openCustomCheckout(d) {
+    checkoutPkg = null;
+    checkoutCustom = { diamonds: d, price: customPrice(d) };
+    $("sh-pack-name").textContent = coName();
+    $("sh-pack-price").textContent = "৳" + coPrice();
     $("sh-username").value = store.shopUser;
     $("sh-step1").hidden = false; $("sh-step2").hidden = true; $("sh-done").hidden = true;
     openModal("shop-modal");
@@ -684,12 +711,43 @@
     var b = e.target.closest ? e.target.closest("[data-buy]") : null;
     if (b) openCheckout(b.getAttribute("data-buy"));
   });
+
+  /* ---------------- custom amount card ---------------- */
+  var cSlider = $("custom-slider"), cInput = $("custom-amount"), cBuyBtn = $("custom-buy");
+  function customValid(d) { return isFinite(d) && d >= CUSTOM_MIN && d <= CUSTOM_MAX; }
+  function paintCustom(d) {
+    if (!customValid(d)) { $("custom-price").textContent = "—"; $("custom-rate").textContent = "Enter an amount between 1,000 and 100,000 Diamonds"; cBuyBtn.disabled = true; return; }
+    $("custom-price").textContent = "৳" + customPrice(d).toLocaleString("en-US");
+    $("custom-rate").textContent = "৳" + customRate(d).toFixed(2) + " per diamond" +
+      (d >= 50000 ? " — ≈10% volume discount applied" : d >= 10000 ? " — ≈5.5% volume discount applied" : " — the packages' average rate");
+    cBuyBtn.disabled = false;
+  }
+  function syncCustom(src) {
+    var d = Math.floor(Number(src.value)) || 0;
+    if (src !== cSlider) cSlider.value = Math.min(CUSTOM_MAX, Math.max(CUSTOM_MIN, d || CUSTOM_MIN));
+    if (src !== cInput) cInput.value = d || "";
+    paintCustom(d);
+  }
+  if (cSlider && cInput && cBuyBtn) {
+    cSlider.addEventListener("input", function () { syncCustom(cSlider); });
+    cInput.addEventListener("input", function () { syncCustom(cInput); });
+    cBuyBtn.addEventListener("click", function () {
+      var d = Math.floor(Number(cInput.value)) || 0;
+      if (!customValid(d)) { toast("Enter an amount between 1,000 and 100,000 Diamonds"); return; }
+      openCustomCheckout(d);
+    });
+    var cChips = document.querySelectorAll("[data-custom]");
+    for (var ci = 0; ci < cChips.length; ci++) cChips[ci].addEventListener("click", function () {
+      cInput.value = this.getAttribute("data-custom"); syncCustom(cInput);
+    });
+    paintCustom(CUSTOM_MIN);
+  }
   $("sh-continue").addEventListener("click", function () {
     var u = $("sh-username").value.trim();
     if (u.length < 2) { toast("Enter a username (min 2 characters)"); return; }
     store.shopUser = u;
-    $("sh-pack-name2").textContent = checkoutPkg.name;
-    $("sh-amount").textContent = "৳" + checkoutPkg.price;
+    $("sh-pack-name2").textContent = coName();
+    $("sh-amount").textContent = "৳" + coPrice();
     $("sh-bkash-num").textContent = BKASH_NUMBER;
     $("sh-trxid").value = "";
     $("sh-phone").value = "";
@@ -718,9 +776,15 @@
     var phone = $("sh-phone").value.replace(/[\s-]/g, "");
     if (!/^(\+8801[3-9]\d{8}|01[3-9]\d{8})$/.test(phone)) { toast("Enter your bKash phone number (e.g. 01712345678)"); return; }
     var btn = $("sh-place"); btn.disabled = true; btn.textContent = "Placing…";
-    sbRpc("place_order", { p_username: u, p_pkg: checkoutPkg.id, p_trxid: trx, p_phone: phone }).then(function (res) {
+    var rpc = checkoutCustom
+      ? sbRpc("place_custom_order", { p_username: u, p_diamonds: checkoutCustom.diamonds, p_trxid: trx, p_phone: phone })
+      : sbRpc("place_order", { p_username: u, p_pkg: checkoutPkg.id, p_trxid: trx, p_phone: phone });
+    rpc.then(function (res) {
       btn.disabled = false; btn.textContent = "Place Order";
-      if (!res.ok) { toast(friendlyShopError(res.error)); return; }
+      if (!res.ok) {
+        if (checkoutCustom && res.error && res.error.indexOf("Could not find the function") !== -1) { toast("Custom orders are not available yet — please pick a package."); return; }
+        toast(friendlyShopError(res.error)); return;
+      }
       /* The order is pending until the admin approves it — then
          diamonds are credited automatically. No claim needed. */
       store.shopUser = u;
