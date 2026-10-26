@@ -102,27 +102,32 @@ function startBot() {
       const senderName = nameForSender(sender);
       // skip the bot's own messages
       if (senderName === config.username) return;
+      // never relay anything containing the login command
+      if (config.loginCommand && s.includes(config.loginCommand)) return;
+      // Private message TO the bot: /msg or /r (reply) -> always notify the
+      // owner, even with no keyword. Checked BEFORE the bot-name guard below,
+      // because a reply addressed as "[Name -> Madara_1ea]" contains the bot's
+      // name, so that guard would otherwise drop it. Shares the mention
+      // cooldown; not relayed as public chat.
+      const priv = privateMsgInfo(s);
+      if (priv) {
+        // skip echo of the bot's own !say (a !say'd whisper-shaped string)
+        if (!(lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text))) {
+          var wName = senderName || priv.sender;
+          var nowW = Date.now();
+          if (config.discordOwnerId && nowW - lastMcMentionPingAt > 5 * 60 * 1000) {
+            lastMcMentionPingAt = nowW;
+            sendToDiscord(`<@${config.discordOwnerId}> 🔔 /msg from ${wName || 'someone'}: ${priv.text}`);
+            log(`Whisper (/msg or /r) alert from ${wName || 'unknown'}.`);
+          }
+        }
+        return; // handled — don't relay whispers as public chat
+      }
       if (!senderName) {
         // unknown sender: fall back to text heuristics
         if (s.includes(config.username)) return;
         // skip echo of something the bot just said itself (e.g. via !say)
         if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return;
-      }
-      // never relay anything containing the login command
-      if (config.loginCommand && s.includes(config.loginCommand)) return;
-      // /msg (whisper) to the bot -> always notify the owner, even with no keyword.
-      // Format: "[RANK ~Name [RANK] -> me] message". Shares the mention cooldown.
-      if (/->\s*me\]/i.test(s)) {
-        var wName = senderName;
-        if (!wName) wName = whisperSender(s);
-        var wText = s.replace(/^\[.*->\s*me\]\s*/i, '').trim() || s;
-        var nowW = Date.now();
-        if (config.discordOwnerId && nowW - lastMcMentionPingAt > 5 * 60 * 1000) {
-          lastMcMentionPingAt = nowW;
-          sendToDiscord(`<@${config.discordOwnerId}> 🔔 /msg from ${wName || 'someone'}: ${wText}`);
-          log(`Whisper (/msg) alert from ${wName || 'unknown'}.`);
-        }
-        return; // handled — don't relay whispers as public chat
       }
       // AuthMe rejected the login -> tell the owner the password is wrong.
       if (/wrong password|incorrect password|not registered|login failed/i.test(s)) {
@@ -389,19 +394,30 @@ function prettyRelay(s) {
   return clean.trim();
 }
 
-// Extract the sender name from a whisper like "[ELITE ~Zinedine_Zidane [RICH] -> me]".
-// Strips color codes and [RANK] tags, then takes the last username-like token.
-function whisperSender(s) {
+// Detect a private message TO the bot: /msg or /r (reply).
+// Formats: "[RANK ~Name [RANK] -> me]", "[RANK ~Name -> Madara_1ea]",
+// "Name -> me: text", "Name whispers: text" / "Name whispers to you: text".
+// Returns { sender, text } or null. Color codes are stripped first.
+function privateMsgInfo(s) {
   try {
     var clean = String(s || '').replace(/§[0-9a-fk-or]/gi, '');
-    var m = clean.match(/^\[(.*)->\s*me\]/i);
-    if (!m) return null;
-    var inner = m[1].replace(/\[[^\]]*\]/g, ' ');
-    var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/);
-    for (var i = toks.length - 1; i >= 0; i--) {
-      var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '');
-      if (/^[A-Za-z0-9_]{3,16}$/.test(t)) return t;
+    var me = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var m = clean.match(new RegExp('\\[(.*)->\\s*(?:me|' + me + ')\\]', 'i'));
+    if (m) {
+      var inner = m[1].replace(/\[[^\]]*\]/g, ' ');
+      var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/);
+      var name = null;
+      for (var i = toks.length - 1; i >= 0; i--) {
+        var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '');
+        if (/^[A-Za-z0-9_]{3,16}$/.test(t)) { name = t; break; }
+      }
+      var text = clean.replace(new RegExp('^.*->\\s*(?:me|' + me + ')\\]\\s*', 'i'), '').trim();
+      return { sender: name, text: text || clean };
     }
+    m = clean.match(new RegExp('^\\s*([A-Za-z0-9_]{3,16})\\s*->\\s*(?:me|' + me + ')\\s*:?\\s*([\\s\\S]*)$', 'i'));
+    if (m) return { sender: m[1], text: m[2].trim() };
+    m = clean.match(/^\s*([A-Za-z0-9_]{3,16})\s+whispers(?:\s+to\s+you)?\s*:\s*([\s\S]*)$/i);
+    if (m) return { sender: m[1], text: m[2].trim() };
   } catch (e) { /* ignore */ }
   return null;
 }
