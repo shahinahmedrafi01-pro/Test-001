@@ -538,12 +538,39 @@ async function replyPlayerList(msg) {
   const entries = names.map((n) => {
     const p = bot.players[n];
     const ping = p && typeof p.ping === 'number' ? p.ping : null;
-    return ping === null ? `${n} - ?ms` : `${n} - ${ping}ms`;
+    return ping === null ? `${n}-?ping` : `${n}-${ping}ping`;
   });
-  const reply = entries.length
+  const text = entries.length
     ? `Online Players: ${entries.join(', ')}`
     : 'Online Players: N/A';
-  await msg.reply(reply.slice(0, 1900)).catch(() => {});
+  // Each player's own Minecraft head next to their name + ping (mc-heads).
+  // Bedrock '.' prefix is stripped for the lookup; a name with no premium
+  // account simply shows no thumbnail in Discord, the text list still covers it.
+  const embeds = names.map((n) => {
+    const p = bot.players[n];
+    const ping = p && typeof p.ping === 'number' ? p.ping : null;
+    const headName = n.replace(/^\./, '');
+    return {
+      title: n,
+      description: ping === null ? '?ping' : `${ping}ping`,
+      thumbnail: { url: `https://mc-heads.net/avatar/${encodeURIComponent(headName)}/64` },
+    };
+  });
+  try {
+    if (embeds.length === 0) {
+      await msg.reply(text).catch(() => {});
+    } else if (embeds.length <= 10) {
+      await msg.reply({ content: text.slice(0, 1900), embeds }).catch(() => {});
+    } else {
+      await msg.reply({ content: text.slice(0, 1900), embeds: embeds.slice(0, 10) }).catch(() => {});
+      for (let i = 10; i < embeds.length; i += 10) {
+        await msg.reply({ embeds: embeds.slice(i, i + 10) }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    // Embed send failed -> fall back to the plain text list.
+    await msg.reply(text.slice(0, 1900)).catch(() => {});
+  }
   log(`Discord playerlist -> ${entries.length} players.`);
 }
 
@@ -561,20 +588,19 @@ async function replyStatus(msg) {
     await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
     return;
   }
-  // Find the sender's in-game entity. This only works when the sender is
-  // online and near the bot — the server only sends entity data for the
-  // bot's surroundings, so a far-away sender has no tracked entity.
+  // The sender's in-game entity when online and near the bot. Otherwise fall
+  // back to the bot's own surroundings, so the command always returns a
+  // result instead of only an error (the server only sends entity data for
+  // the bot's surroundings, so a far-away/offline sender has no tracked entity).
   let senderName = null;
-  let senderEntity = null;
+  let refPos = null;
   for (const n of STATUS_SENDER_NAMES) {
     const p = bot.players ? bot.players[n] : null;
-    if (p && p.entity) { senderName = n; senderEntity = p.entity; break; }
+    if (p && p.entity) { senderName = n; refPos = p.entity.position; break; }
   }
-  if (!senderEntity) {
-    await msg.reply('Could not find your in-game location — make sure you are online and near the bot.').catch(() => {});
-    return;
-  }
-  const pos = senderEntity.position;
+  const isFallback = !refPos;
+  if (isFallback) refPos = bot.entity.position;
+  const pos = refPos;
   const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z);
   let blockName = 'Unknown';
   try {
@@ -601,14 +627,16 @@ async function replyStatus(msg) {
   }
   nearbyPlayers.sort();
   const entityList = Object.keys(entityCounts).sort().map((k) => `${k} - ${entityCounts[k]}x`);
-  const reply = [
+  const lines = [];
+  if (isFallback) lines.push("Note: You are not online near the bot — showing the bot's surroundings.");
+  lines.push(
     `Position: ${x} ${y} ${z}`,
     `Block: ${blockName}`,
     `Nearby Players: ${nearbyPlayers.length ? nearbyPlayers.join(', ') : 'N/A'}`,
     `Nearby Entities: ${entityList.length ? entityList.join(', ') : 'N/A'}`,
-  ].join('\n');
-  await msg.reply(reply.slice(0, 1900)).catch(() => {});
-  log(`Discord status -> ${senderName} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityList.length} entity types nearby.`);
+  );
+  await msg.reply(lines.join('\n').slice(0, 1900)).catch(() => {});
+  log(`Discord status -> ${senderName || 'bot (fallback)'} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityList.length} entity types nearby.`);
 }
 
   discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
