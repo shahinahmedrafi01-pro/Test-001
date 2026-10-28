@@ -492,8 +492,14 @@ async function startDiscord() {
       const low = text.toLowerCase();
 
       // Playerlist -> reply with online players (not sent to the game)
-      if (low === 'playerlist' || low === '!players') {
+      if (low === 'playerlist' || low === '!players' || low === '!p') {
         await replyPlayerList(msg);
+        return;
+      }
+
+      // Status -> reply with the sender's surroundings (not sent to the game)
+      if (low === 'status' || low === '!s') {
+        await replyStatus(msg);
         return;
       }
 
@@ -503,7 +509,7 @@ async function startDiscord() {
       } else if (low.startsWith('!cmd ')) {
         mcText = '/' + text.slice(5).trim().replace(/^\/+/, '');
       } else if (low.startsWith('!')) {
-        await msg.reply('Commands: Playerlist | !say <msg> | !cmd <command>').catch(() => {});
+        await msg.reply('Commands: Playerlist | !p | Status | !s | !say <msg> | !cmd <command>').catch(() => {});
         return;
       } else {
         // direct mode: plain message -> game chat (no !say needed)
@@ -527,17 +533,82 @@ async function replyPlayerList(msg) {
     await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
     return;
   }
-  const names = Object.keys(bot.players || {}).filter((n) => n !== bot.username).sort();
+  // Every player in the tab list, no exclusions — including the bot itself.
+  const names = Object.keys(bot.players || {}).sort();
   const entries = names.map((n) => {
     const p = bot.players[n];
     const ping = p && typeof p.ping === 'number' ? p.ping : null;
-    return ping === null ? `${n}-?ping` : `${n}-${ping}ping`;
+    return ping === null ? `${n} - ?ms` : `${n} - ${ping}ms`;
   });
   const reply = entries.length
-    ? `Server ${entries.length} online: ${entries.join(', ')}`
-    : 'Server 0 online.';
+    ? `Online Players: ${entries.join(', ')}`
+    : 'Online Players: N/A';
   await msg.reply(reply.slice(0, 1900)).catch(() => {});
   log(`Discord playerlist -> ${entries.length} players.`);
+}
+
+// The command sender's known in-game accounts, in order. The Discord bridge is
+// owner-only, so the sender is always the owner.
+const STATUS_SENDER_NAMES = ['alxxq', 'mother_one'];
+
+// 'iron_golem' -> 'Iron Golem', 'zombie' -> 'Zombie'.
+function humanizeEntityName(name) {
+  return String(name || 'Unknown').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function replyStatus(msg) {
+  if (!bot || !bot.entity) {
+    await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
+    return;
+  }
+  // Find the sender's in-game entity. This only works when the sender is
+  // online and near the bot — the server only sends entity data for the
+  // bot's surroundings, so a far-away sender has no tracked entity.
+  let senderName = null;
+  let senderEntity = null;
+  for (const n of STATUS_SENDER_NAMES) {
+    const p = bot.players ? bot.players[n] : null;
+    if (p && p.entity) { senderName = n; senderEntity = p.entity; break; }
+  }
+  if (!senderEntity) {
+    await msg.reply('Could not find your in-game location — make sure you are online and near the bot.').catch(() => {});
+    return;
+  }
+  const pos = senderEntity.position;
+  const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z);
+  let blockName = 'Unknown';
+  try {
+    const b = bot.blockAt(pos.offset(0, -1, 0));
+    if (b) blockName = b.displayName || b.name || 'Unknown';
+  } catch (e) { /* keep Unknown */ }
+  // 3D scan: 20 blocks in all directions, including above and below.
+  const RADIUS = 20;
+  const nearbyPlayers = [];
+  const entityCounts = {};
+  for (const e of Object.values(bot.entities || {})) {
+    if (!e || !e.position) continue;
+    let d;
+    try { d = e.position.distanceTo(pos); } catch (err) { continue; }
+    if (d > RADIUS) continue;
+    if (e.type === 'player') {
+      const un = e.username;
+      if (un && un !== senderName && un !== bot.username) nearbyPlayers.push(un);
+    } else {
+      if (bot.entity && e.id === bot.entity.id) continue;
+      const key = humanizeEntityName(e.name || 'Unknown');
+      entityCounts[key] = (entityCounts[key] || 0) + 1;
+    }
+  }
+  nearbyPlayers.sort();
+  const entityList = Object.keys(entityCounts).sort().map((k) => `${k} - ${entityCounts[k]}x`);
+  const reply = [
+    `Position: ${x} ${y} ${z}`,
+    `Block: ${blockName}`,
+    `Nearby Players: ${nearbyPlayers.length ? nearbyPlayers.join(', ') : 'N/A'}`,
+    `Nearby Entities: ${entityList.length ? entityList.join(', ') : 'N/A'}`,
+  ].join('\n');
+  await msg.reply(reply.slice(0, 1900)).catch(() => {});
+  log(`Discord status -> ${senderName} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityList.length} entity types nearby.`);
 }
 
   discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
