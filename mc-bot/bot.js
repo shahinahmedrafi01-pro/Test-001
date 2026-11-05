@@ -9,6 +9,11 @@ const config = {
   discordToken: process.env.DISCORD_MC_TOKEN || '',
   discordChannelId: process.env.DISCORD_CHANNEL_ID || '',
   discordOwnerId: process.env.DISCORD_OWNER_ID || '',
+  // Extra Discord users allowed to use the bridge channel (comma-separated IDs).
+  discordAllowedIds: (process.env.DISCORD_ALLOWED_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
 
 function log(msg) {
@@ -17,6 +22,7 @@ function log(msg) {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`);
+log(`Discord allowlist: ${config.discordAllowedIds.length} extra user(s) allowed in the bridge channel.`);
 
 let failCount = 0;
 let bot = null;
@@ -486,7 +492,8 @@ async function startDiscord() {
         }
         return; // call-outs are not relayed to the game
       }
-      if (config.discordOwnerId && msg.author.id !== config.discordOwnerId) return; // owner only
+      // Owner + allowlist only. Mention alerts above stay owner-only.
+      if (config.discordOwnerId && msg.author.id !== config.discordOwnerId && !config.discordAllowedIds.includes(msg.author.id)) return;
       const text = (msg.content || '').trim();
       if (!text) return;
       const low = text.toLowerCase();
@@ -547,8 +554,8 @@ async function replyPlayerList(msg) {
   log(`Discord playerlist -> ${entries.length} players.`);
 }
 
-// The command sender's known in-game accounts, in order. The Discord bridge is
-// owner-only, so the sender is always the owner.
+// The command sender's known in-game accounts, in order. Status always
+// reports the owner's surroundings, whoever on the allowlist asked.
 const STATUS_SENDER_NAMES = ['alxxq', 'mother_one'];
 
 // 'iron_golem' -> 'Iron Golem', 'zombie' -> 'Zombie'.
