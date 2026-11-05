@@ -35,3 +35,4 @@ jobs:
           DISCORD_MC_TOKEN: ${{ secrets.DISCORD_MC_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           DISCORD_OWNER_ID: ${{ secrets.DISCORD_OWNER_ID }}
+          DISCORD_ALLOWED_IDS: ${{ secrets.DISCORD_ALLOWED_IDS }}
