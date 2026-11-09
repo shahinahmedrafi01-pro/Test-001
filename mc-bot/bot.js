@@ -664,6 +664,74 @@ async function buildPlayerlistCard(players) {
 }
 // ==== PLAYERLIST-CARD-END ====
 
+// Status card: same style as the Playerlist card (Sir approved the demo
+// 2026-11-09). Returns a PNG buffer, or null so the caller falls back to text.
+async function buildStatusCard({ position, block, nearbyPlayers, entities }) {
+  const sharp = loadSharp();
+  if (!sharp) return null;
+  const W = 1280;
+  const PAD = 36;
+  const panelW = (W - PAD * 2 - 16) / 2;
+  const playersJoined = nearbyPlayers.length ? nearbyPlayers.join(', ') : 'None nearby';
+  const playersText = playersJoined.length > 90 ? playersJoined.slice(0, 90) + '…' : playersJoined;
+
+  let entitiesSection = '';
+  let H;
+  if (entities.length) {
+    const COLS = 3;
+    const GAP = 14;
+    const CHIP_W = (W - PAD * 2 - (COLS - 1) * GAP) / COLS;
+    const CHIP_H = 58;
+    const GRID_Y = 330;
+    let chips = '';
+    entities.forEach(([name, count], i) => {
+      const cx = PAD + (i % COLS) * (CHIP_W + GAP);
+      const cy = GRID_Y + Math.floor(i / COLS) * (CHIP_H + GAP);
+      const countText = `${count}x`;
+      const pillW = Math.max(56, countText.length * 13 + 26);
+      chips += `
+      <g>
+        <rect x="${cx}" y="${cy}" width="${CHIP_W}" height="${CHIP_H}" rx="14" fill="#12121f" stroke="#26263f"/>
+        <text x="${cx + 18}" y="${cy + 37}" font-family="Poppins" font-weight="500" font-size="20" fill="#f4f4fa">${xmlEsc(name)}</text>
+        <rect x="${cx + CHIP_W - 18 - pillW}" y="${cy + 14}" width="${pillW}" height="30" rx="15" fill="#3b1470"/>
+        <text x="${cx + CHIP_W - 18 - pillW / 2}" y="${cy + 36}" font-family="Poppins" font-weight="700" font-size="17" fill="#d8b4fe" text-anchor="middle">${countText}</text>
+      </g>`;
+    });
+    const rows = Math.ceil(entities.length / COLS);
+    H = GRID_Y + rows * CHIP_H + (rows - 1) * GAP + 32;
+    entitiesSection = `
+  <rect x="${PAD}" y="296" width="7" height="26" rx="3" fill="#a855f7"/>
+  <text x="${PAD + 18}" y="318" font-family="Poppins" font-weight="700" font-size="23" fill="#ffffff">Nearby Entities</text>
+  <text x="${W - PAD}" y="318" font-family="Poppins" font-weight="500" font-size="18" fill="#8f8fb0" text-anchor="end">${entities.length} types</text>
+  ${chips}`;
+  } else {
+    H = 330;
+    entitiesSection = `
+  <rect x="${PAD}" y="296" width="7" height="26" rx="3" fill="#a855f7"/>
+  <text x="${PAD + 18}" y="318" font-family="Poppins" font-weight="700" font-size="23" fill="#ffffff">Nearby Entities</text>
+  <text x="${W - PAD}" y="318" font-family="Poppins" font-weight="500" font-size="18" fill="#8f8fb0" text-anchor="end">None nearby</text>`;
+  }
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect x="2" y="2" width="${W - 4}" height="${H - 4}" rx="26" fill="#0a0a15" stroke="#3b2d5c" stroke-width="2"/>
+  <text x="${PAD}" y="60" font-family="Poppins" font-weight="700" font-size="40" fill="#ffffff">Status</text>
+  <rect x="${W - PAD - 168}" y="24" width="168" height="46" rx="23" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <circle cx="${W - PAD - 140}" cy="47" r="6" fill="#4ade80"/>
+  <text x="${W - PAD - 124}" y="56" font-family="Poppins" font-weight="600" font-size="21" fill="#4ade80">In Game</text>
+  <rect x="${PAD}" y="92" width="${panelW}" height="98" rx="16" fill="#12121f" stroke="#26263f"/>
+  <text x="${PAD + 22}" y="126" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">POSITION</text>
+  <text x="${PAD + 22}" y="168" font-family="Poppins" font-weight="600" font-size="31" fill="#f4f4fa">${xmlEsc(position)}</text>
+  <rect x="${PAD + panelW + 16}" y="92" width="${panelW}" height="98" rx="16" fill="#12121f" stroke="#26263f"/>
+  <text x="${PAD + panelW + 38}" y="126" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">STANDING ON</text>
+  <text x="${PAD + panelW + 38}" y="168" font-family="Poppins" font-weight="600" font-size="31" fill="#f4f4fa">${xmlEsc(block)}</text>
+  <rect x="${PAD}" y="206" width="${W - PAD * 2}" height="66" rx="16" fill="#12121f" stroke="#26263f"/>
+  <text x="${PAD + 22}" y="247" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">NEARBY PLAYERS</text>
+  <text x="${PAD + 268}" y="248" font-family="Poppins" font-weight="500" font-size="22" fill="${nearbyPlayers.length ? '#f4f4fa' : '#8f8fb0'}">${xmlEsc(playersText)}</text>
+  ${entitiesSection}
+</svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
 async function replyPlayerList(msg) {
   if (!bot || !bot.entity) {
     await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
@@ -749,7 +817,24 @@ async function replyStatus(msg) {
     }
   }
   nearbyPlayers.sort();
-  const entityList = Object.keys(entityCounts).sort().map((k) => `${k} - ${entityCounts[k]}x`);
+  const entityPairs = Object.keys(entityCounts).sort().map((k) => [k, entityCounts[k]]);
+  // Designed image card first; the plain text status stays as the fallback.
+  try {
+    const card = await buildStatusCard({
+      position: `${x} · ${y} · ${z}`,
+      block: blockName,
+      nearbyPlayers,
+      entities: entityPairs,
+    });
+    if (card) {
+      await msg.reply({ files: [{ attachment: card, name: 'status.png' }] });
+      log(`Discord status card -> ${senderName || 'bot (fallback)'} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityPairs.length} entity types nearby.`);
+      return;
+    }
+  } catch (e) {
+    log('Status card failed, using text: ' + e.message);
+  }
+  const entityList = entityPairs.map(([k, c]) => `${k} - ${c}x`);
   const lines = [];
   lines.push(
     `Position: ${x} ${y} ${z}`,
