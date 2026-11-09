@@ -1,4 +1,5 @@
 const mineflayer = require('mineflayer');
+const http = require('http');
 
 const config = {
   host: process.env.MC_HOST || 'mc.havencraft.pro',
@@ -23,6 +24,20 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`);
 log(`Discord allowlist: ${config.discordAllowedIds.length} extra user(s) allowed in the bridge channel.`);
+
+// Health server for Render Web Service hosting: Render gives the service a
+// PORT and expects it to answer HTTP; UptimeRobot pings it to keep the free
+// service awake. This is the ONLY change from the GitHub Actions build —
+// every bot feature below is unchanged.
+if (process.env.PORT) {
+  const healthPort = parseInt(process.env.PORT, 10);
+  http
+    .createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('Madara_1ea bot is running.');
+    })
+    .listen(healthPort, () => log(`Health server listening on port ${healthPort}.`));
+}
 
 let failCount = 0;
 let bot = null;
