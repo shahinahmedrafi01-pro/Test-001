@@ -670,7 +670,10 @@ async function replyPlayerList(msg) {
     return;
   }
   // Every player in the tab list, no exclusions — including the bot itself.
-  const names = Object.keys(bot.players || {}).sort();
+  // A-Z order, case-insensitive (Sir's list format, 2026-11-09).
+  const names = Object.keys(bot.players || {}).sort((a, b) =>
+    a.toLowerCase().localeCompare(b.toLowerCase())
+  );
   const players = names.map((n) => {
     const p = bot.players[n];
     return { name: n, ping: p && typeof p.ping === 'number' ? p.ping : null };
