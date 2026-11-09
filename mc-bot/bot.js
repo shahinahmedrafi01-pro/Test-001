@@ -550,6 +550,120 @@ async function startDiscord() {
     }
   });
 
+// ==== PLAYERLIST-CARD-START ====
+// Designed Playerlist card: renders the online list as a PNG image in the
+// HavenCraft purple style (Sir approved the cropped grid design 2026-11-09).
+// Heads come from mc-heads (Java skins; Bedrock/unknown players get its
+// default Steve face). Any failure anywhere falls back to the text list.
+const CARD_MAX_PLAYERS = parseInt(process.env.MC_MAX_PLAYERS || '50', 10);
+const headCache = new Map();
+let sharpModule; // undefined = not tried yet, null = unavailable
+
+function setupCardFonts() {
+  try {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const dir = path.join(__dirname, 'fonts');
+    if (!fs.existsSync(dir)) return;
+    const conf = path.join(os.tmpdir(), 'mc-bot-fonts.conf');
+    fs.writeFileSync(
+      conf,
+      `<?xml version="1.0"?><fontconfig><dir>${dir}</dir><cachedir>${os.tmpdir()}</cachedir></fontconfig>`
+    );
+    process.env.FONTCONFIG_FILE = conf;
+  } catch (_) {
+    /* system fonts are fine too */
+  }
+}
+
+function loadSharp() {
+  if (sharpModule !== undefined) return sharpModule;
+  try {
+    setupCardFonts();
+    sharpModule = require('sharp');
+  } catch (_) {
+    sharpModule = null;
+  }
+  return sharpModule;
+}
+
+async function fetchHeadBase64(name) {
+  if (headCache.has(name)) return headCache.get(name);
+  let out = null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2500);
+    const res = await fetch('https://mc-heads.net/avatar/' + encodeURIComponent(name) + '/100', {
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 100) out = buf.toString('base64');
+    }
+  } catch (_) {
+    /* letter tile fallback */
+  }
+  headCache.set(name, out);
+  return out;
+}
+
+function cardPingColor(ping) {
+  if (ping === null) return '#9ca3af';
+  if (ping < 50) return '#4ade80';
+  if (ping < 120) return '#fbbf24';
+  return '#f87171';
+}
+
+function xmlEsc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function buildPlayerlistCard(players) {
+  const sharp = loadSharp();
+  if (!sharp) return null;
+  const W = 1280;
+  const PAD = 36;
+  const GAP = 16;
+  const CELL_W = (W - PAD * 2 - GAP) / 2;
+  const CELL_H = 78;
+  const GRID_Y = 100;
+  const rows = Math.max(1, Math.ceil(players.length / 2));
+  const H = GRID_Y + rows * CELL_H + (rows - 1) * GAP + 30;
+  const heads = await Promise.all(players.map((p) => fetchHeadBase64(p.name)));
+  const tileColors = ['#4c1d95', '#6d28d9', '#7c3aed', '#831843', '#581c87', '#701a75', '#5b21b6', '#9333ea'];
+
+  let cells = '';
+  players.forEach((p, i) => {
+    const x = PAD + (i % 2) * (CELL_W + GAP);
+    const y = GRID_Y + Math.floor(i / 2) * (CELL_H + GAP);
+    const pc = cardPingColor(p.ping);
+    const pingText = p.ping === null ? '? ping' : `${p.ping} ping`;
+    const head = heads[i]
+      ? `<clipPath id="hc${i}"><rect x="${x + 13}" y="${y + 13}" width="52" height="52" rx="10"/></clipPath><image x="${x + 13}" y="${y + 13}" width="52" height="52" clip-path="url(#hc${i})" href="data:image/png;base64,${heads[i]}"/>`
+      : `<rect x="${x + 13}" y="${y + 13}" width="52" height="52" rx="10" fill="${tileColors[i % tileColors.length]}"/><text x="${x + 39}" y="${y + 51}" font-family="Poppins" font-weight="700" font-size="26" fill="#ffffff" text-anchor="middle">${xmlEsc(p.name[0].toUpperCase())}</text>`;
+    cells += `
+    <g>
+      <rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" rx="16" fill="#12121f" stroke="#26263f"/>
+      ${head}
+      <text x="${x + 82}" y="${y + 50}" font-family="Poppins" font-weight="600" font-size="25" fill="#f4f4fa">${xmlEsc(p.name)}</text>
+      <text x="${x + CELL_W - 24}" y="${y + 50}" font-family="Poppins" font-weight="600" font-size="23" fill="${pc}" text-anchor="end">${pingText}</text>
+    </g>`;
+  });
+
+  const badgeText = `${players.length} / ${CARD_MAX_PLAYERS}`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect x="2" y="2" width="${W - 4}" height="${H - 4}" rx="26" fill="#0a0a15" stroke="#3b2d5c" stroke-width="2"/>
+  <text x="${PAD}" y="60" font-family="Poppins" font-weight="700" font-size="40" fill="#ffffff">Online Players</text>
+  <rect x="${W - PAD - 132}" y="24" width="132" height="46" rx="23" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="${W - PAD - 66}" y="57" font-family="Poppins" font-weight="600" font-size="24" fill="#4ade80" text-anchor="middle">${badgeText}</text>
+  ${cells}
+</svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+// ==== PLAYERLIST-CARD-END ====
+
 async function replyPlayerList(msg) {
   if (!bot || !bot.entity) {
     await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
@@ -557,11 +671,22 @@ async function replyPlayerList(msg) {
   }
   // Every player in the tab list, no exclusions — including the bot itself.
   const names = Object.keys(bot.players || {}).sort();
-  const entries = names.map((n) => {
+  const players = names.map((n) => {
     const p = bot.players[n];
-    const ping = p && typeof p.ping === 'number' ? p.ping : null;
-    return ping === null ? `${n}-?ping` : `${n}-${ping}ping`;
+    return { name: n, ping: p && typeof p.ping === 'number' ? p.ping : null };
   });
+  // Designed image card first; the plain text list stays as the fallback.
+  try {
+    const card = await buildPlayerlistCard(players);
+    if (card) {
+      await msg.reply({ files: [{ attachment: card, name: 'playerlist.png' }] });
+      log(`Discord playerlist card -> ${players.length} players.`);
+      return;
+    }
+  } catch (e) {
+    log('Playerlist card failed, using text: ' + e.message);
+  }
+  const entries = players.map((p) => (p.ping === null ? `${p.name}-?ping` : `${p.name}-${p.ping}ping`));
   const text = entries.length
     ? `Online Players: ${entries.join(', ')}`
     : 'Online Players: N/A';
