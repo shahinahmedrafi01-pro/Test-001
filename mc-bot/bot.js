@@ -376,9 +376,9 @@ function scheduleReconnect() {
   try { if (bot) bot.quit(); } catch (e) {}
   bot = null;
   failCount++;
-  // 1st failure: retry in 15s. Repeated failures (server restarting/down):
-  // retry every 2 minutes.
-  const delay = failCount >= 2 ? 120000 : 15000;
+  // Sir's retry ladder (2026-11-10): 5s, 10s, 30s, 1m, then every 5 minutes.
+  const RETRY_LADDER_MS = [5000, 10000, 30000, 60000, 300000];
+  const delay = RETRY_LADDER_MS[Math.min(failCount, RETRY_LADDER_MS.length) - 1];
   log(`Reconnecting in ${delay / 1000}s ... (consecutive fails: ${failCount})`);
   setTimeout(() => { reconnectScheduled = false; startBot(); }, delay);
 }
