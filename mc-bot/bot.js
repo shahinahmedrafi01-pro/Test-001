@@ -42,6 +42,8 @@ if (process.env.PORT) {
 let failCount = 0;
 let bot = null;
 let afkTimer = null;
+let spawnWatchdogTimer = null; // forces a reconnect if a connection hangs before spawn
+let reconnectScheduled = false; // prevents double-scheduling when kick+end fire together
 let behaviorTimers = [];
 let lastLoginSent = 0;
 let lastHiiAt = 0; // global cooldown so !hii can't spam from any path
@@ -79,7 +81,20 @@ function startBot() {
     version: false, // auto-detect server version
   });
 
+  // Spawn watchdog: a connection can hang silently — no spawn, no error, no
+  // kick (seen 2026-11-10 on Render) — and the event-based reconnect would
+  // never fire. If this bot has not spawned within 90s, force a reconnect.
+  const thisBot = bot;
+  if (spawnWatchdogTimer) clearTimeout(spawnWatchdogTimer);
+  spawnWatchdogTimer = setTimeout(() => {
+    if (bot === thisBot) {
+      log('Spawn watchdog: not spawned after 90s, forcing a reconnect.');
+      scheduleReconnect();
+    }
+  }, 90000);
+
   bot.on('spawn', () => {
+    if (spawnWatchdogTimer) { clearTimeout(spawnWatchdogTimer); spawnWatchdogTimer = null; }
     log(`Spawned. Server version: ${bot.version}`);
     failCount = 0;
     lastLoginSent = 0;
@@ -354,6 +369,8 @@ function scheduleTotemRefill() {
 
 /* ---------- reconnect logic ---------- */
 function scheduleReconnect() {
+  if (reconnectScheduled) return; // kick+end (or the watchdog) can race here
+  reconnectScheduled = true;
   if (afkTimer) { clearInterval(afkTimer); afkTimer = null; }
   clearBehavior();
   try { if (bot) bot.quit(); } catch (e) {}
@@ -363,7 +380,7 @@ function scheduleReconnect() {
   // retry every 2 minutes.
   const delay = failCount >= 2 ? 120000 : 15000;
   log(`Reconnecting in ${delay / 1000}s ... (consecutive fails: ${failCount})`);
-  setTimeout(startBot, delay);
+  setTimeout(() => { reconnectScheduled = false; startBot(); }, delay);
 }
 
 /* ---------- Discord bridge (remote control + chat relay) ---------- */
