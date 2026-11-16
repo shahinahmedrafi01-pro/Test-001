@@ -28,7 +28,8 @@ const {
   isAllowedPanelUser,
   isAllowedMcName,
   parsePanelCommand,
-  parseWhisperCommand
+  parseWhisperCommand,
+  parsePrivateMessage
 } = require('./lib/panel-commands')
 
 const config = {
@@ -403,33 +404,15 @@ function prettyRelay (s) {
 }
 
 // Detect a private message TO the bot: /msg or /r (reply).
-// Formats: "[RANK ~Name [RANK] -> me]", "[RANK ~Name -> Madara_1ea]",
-// "Name -> me: text", "Name whispers: text" / "Name whispers to you: text".
-// Returns { sender, text } or null. Color codes are stripped first.
-// (Copied from the live build; the merged build uses it for whisper
-// CONTROL instead of owner pings.)
+// The parsing itself lives in lib/panel-commands.js (parsePrivateMessage)
+// so it is unit-testable — see test-whisper-parser.js. It covers the
+// vanilla whisper format and the Essentials bracket formats, tolerates
+// rank decoration around BOTH names, and preserves Bedrock leading dots
+// (the previous inline version stripped '.', which broke the allowlist
+// match for ".Rafi_PRX" on the live server — fix round 2).
+// Returns { sender, text } or null.
 function privateMsgInfo (s) {
-  try {
-    var clean = String(s || '').replace(/§[0-9a-fk-or]/gi, '')
-    var me = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    var m = clean.match(new RegExp('\\[(.*)->\\s*(?:me|' + me + ')\\]', 'i'))
-    if (m) {
-      var inner = m[1].replace(/\[[^\]]*\]/g, ' ')
-      var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/)
-      var name = null
-      for (var i = toks.length - 1; i >= 0; i--) {
-        var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '')
-        if (/^[A-Za-z0-9_]{3,16}$/.test(t)) { name = t; break }
-      }
-      var text = clean.replace(new RegExp('^.*->\\s*(?:me|' + me + ')\\]\\s*', 'i'), '').trim()
-      return { sender: name, text: text || clean }
-    }
-    m = clean.match(new RegExp('^\\s*([A-Za-z0-9_]{3,16})\\s*->\\s*(?:me|' + me + ')\\s*:?\\s*([\\s\\S]*)$', 'i'))
-    if (m) return { sender: m[1], text: m[2].trim() }
-    m = clean.match(/^\s*([A-Za-z0-9_]{3,16})\s+whispers(?:\s+to\s+you)?\s*:\s*([\s\S]*)$/i)
-    if (m) return { sender: m[1], text: m[2].trim() }
-  } catch (e) { /* ignore */ }
-  return null
+  return parsePrivateMessage(s, { meName: config.username, allowlist: config.pvpAllowlist })
 }
 
 // Resolve a chat packet sender UUID -> player name via the tab list.
