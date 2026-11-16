@@ -1,5 +1,35 @@
-const mineflayer = require('mineflayer');
-const http = require('http');
+'use strict'
+// Madara_1ea — MERGED BUILD (PvP brain + Madara lifecycle), staging only.
+//
+// Built from the live Madara code (~/workspace/mc-bot-render/bot.js) with
+// the Phase 2 PvP brain (lib/pvp-brain.js) merged in, per Rafi's spec:
+//
+//   KEPT from Madara: Minecraft connection + AuthMe login flow (env-driven,
+//     MC_LOGIN_CMD — never hardcoded), the Render health server, the
+//     Discord bridge + #bot-panel with the SAME allowlist semantics
+//     (DISCORD_OWNER_ID + DISCORD_ALLOWED_IDS), the spawn watchdog and the
+//     reconnect ladder, minimal anti-AFK (gentle look-around), and the
+//     idle auto-totem upkeep.
+//   REMOVED (extras OFF): status cards (!s / status), playerlist image
+//     cards (!p / playerlist), greetings + double-crouch behaviour, !hii,
+//     mention alerts (both directions), join/leave owner pings, whisper
+//     owner pings. The bot idles silently, standing at its spot.
+//   ADDED: the full Phase 2 PvP brain — custom combat loop, humanized
+//     120–250 ms reactions, crits, pearl-out rule, mace combo, spear
+//     Lunge, hotbar self-organization, and FULLY AUTOMATIC armor care
+//     (spare swap + XP-bottle Mending repair in safe windows, no command
+//     needed). Controls: Discord panel (!pvp fight/stop/come/combo) and
+//     in-game whispers from allowlisted players ("pvp fight" / "pvp stop").
+
+const mineflayer = require('mineflayer')
+const http = require('http')
+const { attachPvpBrain } = require('./lib/pvp-brain')
+const {
+  isAllowedPanelUser,
+  isAllowedMcName,
+  parsePanelCommand,
+  parseWhisperCommand
+} = require('./lib/panel-commands')
 
 const config = {
   host: process.env.MC_HOST || 'mc.havencraft.pro',
@@ -15,885 +45,543 @@ const config = {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
-};
-
-function log(msg) {
-  console.log(`[${new Date().toISOString()}] ${msg}`);
+  // In-game usernames allowed to drive the bot by whisper (/msg). Rafi's
+  // own accounts by default (the live code's status feature already knew
+  // alxxq + mother_one; .Rafi_PRX is his Bedrock name). Override with
+  // MC_PVP_ALLOWLIST (comma-separated) — not a secret, just a name list.
+  pvpAllowlist: (process.env.MC_PVP_ALLOWLIST || 'alxxq,.Rafi_PRX,mother_one')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`);
-log(`Discord allowlist: ${config.discordAllowedIds.length} extra user(s) allowed in the bridge channel.`);
+function log (msg) {
+  console.log(`[${new Date().toISOString()}] ${msg}`)
+}
+function sleep (ms) { return new Promise((r) => setTimeout(r, ms)) }
+
+log(`Login command configured: ${config.loginCommand ? 'YES' : 'NO (MC_LOGIN_CMD secret missing!)'}`)
+log(`Discord allowlist: ${config.discordAllowedIds.length} extra user(s) allowed in the bridge channel.`)
+log(`PvP whisper allowlist: ${config.pvpAllowlist.join(', ')}`)
 
 // Health server for Render Web Service hosting: Render gives the service a
 // PORT and expects it to answer HTTP; UptimeRobot pings it to keep the free
-// service awake. This is the ONLY change from the GitHub Actions build —
-// every bot feature below is unchanged.
+// service awake. (Same as the live build.)
 if (process.env.PORT) {
-  const healthPort = parseInt(process.env.PORT, 10);
+  const healthPort = parseInt(process.env.PORT, 10)
   http
     .createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('Madara_1ea bot is running.');
+      res.writeHead(200, { 'Content-Type': 'text/plain' })
+      res.end('Madara_1ea bot is running.')
     })
-    .listen(healthPort, () => log(`Health server listening on port ${healthPort}.`));
+    .listen(healthPort, () => log(`Health server listening on port ${healthPort}.`))
 }
 
-let failCount = 0;
-let bot = null;
-let afkTimer = null;
-let spawnWatchdogTimer = null; // forces a reconnect if a connection hangs before spawn
-let reconnectScheduled = false; // prevents double-scheduling when kick+end fire together
-let behaviorTimers = [];
-let lastLoginSent = 0;
-let lastHiiAt = 0; // global cooldown so !hii can't spam from any path
+let failCount = 0
+let bot = null
+let brain = null // the PvP brain attached to the current bot instance
+let afkTimer = null
+let totemTimer = null
+let spawnWatchdogTimer = null // forces a reconnect if a connection hangs before spawn
+let reconnectScheduled = false // prevents double-scheduling when kick+end fire together
+let lastLoginSent = 0
 
-function tryHiiReply() {
-  const now = Date.now();
-  if (now - lastHiiAt < 20000) return; // 20s global cooldown
-  lastHiiAt = now;
-  try {
-    botSay('hii');
-    log('Said hii.');
-  } catch (e) { log('hii reply failed: ' + e.message); }
+// Track messages the bot itself sends, so the relay doesn't echo them back.
+let lastBotSay = { text: '', at: 0 }
+function botSay (text) {
+  lastBotSay = { text: String(text), at: Date.now() }
+  bot.chat(text)
 }
 
-function sendLogin() {
+function sendLogin () {
   if (!config.loginCommand) {
-    log('Cannot login: MC_LOGIN_CMD secret is not set!');
-    return;
+    log('Cannot login: MC_LOGIN_CMD secret is not set!')
+    return
   }
-  const now = Date.now();
-  if (now - lastLoginSent < 10000) return; // don't spam
-  lastLoginSent = now;
+  const now = Date.now()
+  if (now - lastLoginSent < 10000) return // don't spam
+  lastLoginSent = now
   try {
-    botSay(config.loginCommand);
-    log('Sent login command.');
-  } catch (e) { log('Login chat failed: ' + e.message); }
+    botSay(config.loginCommand)
+    log('Sent login command.')
+  } catch (e) { log('Login chat failed: ' + e.message) }
 }
 
-function startBot() {
-  log(`Connecting as ${config.username} to ${config.host}:${config.port} (fails so far: ${failCount})`);
+function brainBusy () {
+  return !!(brain && (brain.busy || brain.mode !== 'idle'))
+}
+
+function startBot () {
+  log(`Connecting as ${config.username} to ${config.host}:${config.port} (fails so far: ${failCount})`)
   bot = mineflayer.createBot({
     host: config.host,
     port: config.port,
     username: config.username,
-    version: false, // auto-detect server version
-  });
+    version: false // auto-detect server version
+  })
+  brain = attachPvpBrain(bot, { reactionMinMs: 120, reactionMaxMs: 250 })
 
   // Spawn watchdog: a connection can hang silently — no spawn, no error, no
   // kick (seen 2026-11-10 on Render) — and the event-based reconnect would
   // never fire. If this bot has not spawned within 90s, force a reconnect.
-  const thisBot = bot;
-  if (spawnWatchdogTimer) clearTimeout(spawnWatchdogTimer);
+  const thisBot = bot
+  if (spawnWatchdogTimer) clearTimeout(spawnWatchdogTimer)
   spawnWatchdogTimer = setTimeout(() => {
     if (bot === thisBot) {
-      log('Spawn watchdog: not spawned after 90s, forcing a reconnect.');
-      scheduleReconnect();
+      log('Spawn watchdog: not spawned after 90s, forcing a reconnect.')
+      scheduleReconnect()
     }
-  }, 90000);
+  }, 90000)
 
   bot.on('spawn', () => {
-    if (spawnWatchdogTimer) { clearTimeout(spawnWatchdogTimer); spawnWatchdogTimer = null; }
-    log(`Spawned. Server version: ${bot.version}`);
-    failCount = 0;
-    lastLoginSent = 0;
-    // join notification (10-min cooldown so reconnect loops don't spam pings)
-    const nowJ = Date.now();
-    if (nowJ - lastJoinPingAt > 10 * 60 * 1000) {
-      lastJoinPingAt = nowJ;
-      pingOwner('🔔 Madara has joined the Minecraft server!');
-      log('Sent join notification to Discord.');
-    }
-    setTimeout(sendLogin, 4000);
+    if (spawnWatchdogTimer) { clearTimeout(spawnWatchdogTimer); spawnWatchdogTimer = null }
+    log(`Spawned. Server version: ${bot.version}`)
+    failCount = 0
+    lastLoginSent = 0
+    setTimeout(sendLogin, 4000)
     // retry login a few times in case the auth plugin was slow
-    setTimeout(sendLogin, 12000);
-    setTimeout(sendLogin, 25000);
-    startAntiAfk();
-    startBehavior();
-  });
+    setTimeout(sendLogin, 12000)
+    setTimeout(sendLogin, 25000)
+    startAntiAfk()
+    startTotemUpkeep()
+  })
 
   bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
-    log(`<${username}> ${message}`);
-    // AuthMe-style prompt -> send login right away
+    if (username === bot.username) return
+    // AuthMe-style prompt -> send login right away. (The live build's !hii
+    // reply is REMOVED in the merged build — extras OFF.)
     if (/\/login|please login|log in/i.test(message)) {
-      log('Server asked for login, sending command...');
-      setTimeout(sendLogin, 1500);
+      log('Server asked for login, sending command...')
+      setTimeout(sendLogin, 1500)
     }
-    // !hii command -> bot says "hii"
-    if (message.trim().toLowerCase() === '!hii') {
-      log(`!hii from ${username}.`);
-      tryHiiReply();
-    }
-  });
+  })
 
-  // Raw-message fallback: some servers use custom chat formats that mineflayer's
-  // 'chat' event doesn't parse. This keeps the Discord relay, !hii and login
-  // detection working on those servers too.
+  // Vanilla/Paper whisper event -> PvP duel control (allowlisted only).
+  bot.on('whisper', (username, message) => {
+    handleWhisper(username, message, 'whisper-event')
+  })
+
+  // Raw-message fallback: some servers use custom chat formats that
+  // mineflayer's 'chat' event doesn't parse. This keeps the login-prompt
+  // detection, the whisper control (Essentials-style /msg formats) and the
+  // Discord relay working on those servers too. NO mention alerts and NO
+  // whisper owner-pings in the merged build — whispers are either PvP
+  // commands or dropped silently.
   bot.on('messagestr', (msgStr, _pos, _orig, sender) => {
     try {
-      const s = (msgStr || '').trim();
-      if (!s) return;
-      const senderName = nameForSender(sender);
+      const s = (msgStr || '').trim()
+      if (!s) return
+      const senderName = nameForSender(sender)
       // skip the bot's own messages
-      if (senderName === config.username) return;
+      if (senderName === config.username) return
       // never relay anything containing the login command
-      if (config.loginCommand && s.includes(config.loginCommand)) return;
-      // Private message TO the bot: /msg or /r (reply) -> always notify the
-      // owner, even with no keyword. Checked BEFORE the bot-name guard below,
-      // because a reply addressed as "[Name -> Madara_1ea]" contains the bot's
-      // name, so that guard would otherwise drop it. Shares the mention
-      // cooldown; not relayed as public chat.
-      const priv = privateMsgInfo(s);
+      if (config.loginCommand && s.includes(config.loginCommand)) return
+      // Private message TO the bot: /msg or /r -> PvP whisper control.
+      const priv = privateMsgInfo(s)
       if (priv) {
         // skip echo of the bot's own !say (a !say'd whisper-shaped string)
         if (!(lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text))) {
-          var wName = senderName || priv.sender;
-          var nowW = Date.now();
-          if (config.discordOwnerId && nowW - lastMcMentionPingAt > 5 * 60 * 1000) {
-            lastMcMentionPingAt = nowW;
-            sendToDiscord(`<@${config.discordOwnerId}> 🔔 /msg from ${wName || 'someone'}: ${priv.text}`);
-            log(`Whisper (/msg or /r) alert from ${wName || 'unknown'}.`);
-          }
+          handleWhisper(senderName || priv.sender, priv.text, 'messagestr')
         }
-        return; // handled — don't relay whispers as public chat
+        return // whispers are never relayed as public chat
       }
       if (!senderName) {
         // unknown sender: fall back to text heuristics
-        if (s.includes(config.username)) return;
+        if (s.includes(config.username)) return
         // skip echo of something the bot just said itself (e.g. via !say)
-        if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return;
+        if (lastBotSay.text && Date.now() - lastBotSay.at < 8000 && s.includes(lastBotSay.text)) return
       }
-      // AuthMe rejected the login -> tell the owner the password is wrong.
+      // AuthMe rejected the login -> log it (the live build pinged the
+      // owner on Discord; owner pings are REMOVED in the merged build).
       if (/wrong password|incorrect password|not registered|login failed/i.test(s)) {
-        log('AuthMe says the login failed (wrong password?).');
-        if (config.discordOwnerId) sendToDiscord(`<@${config.discordOwnerId}> ⚠️ MC login failed — wrong password? Please update the MC_LOGIN_CMD secret.`);
-      }
-      // Madara/Rafi/Admin mention alert for in-game chat: ping the owner on Discord.
-      // Requires a known player sender so join/leave/system messages can't false-trigger.
-      // 5-minute cooldown for in-game mentions: no mention spam.
-      if (config.discordOwnerId && senderName && (s.toLowerCase().includes('madara') || s.toLowerCase().includes('rafi') || s.toLowerCase().includes('admin'))) {
-        const now = Date.now();
-        if (now - lastMcMentionPingAt > 5 * 60 * 1000) {
-          lastMcMentionPingAt = now;
-          sendToDiscord(`<@${config.discordOwnerId}> 🔔 Someone mentioned you on the server!`);
-          log(`Mention alert (MC) from ${senderName}.`);
-        }
+        log('AuthMe says the login failed (wrong password?). Check the MC_LOGIN_CMD secret.')
       }
       // login prompt fallback
       if (/\/login|please login|log in/i.test(s)) {
-        log('Server asked for login (raw), sending command...');
-        setTimeout(sendLogin, 1500);
-      }
-      // !hii fallback for custom chat formats
-      if (/!hii\s*$/i.test(s)) {
-        log(`!hii detected${senderName ? ' from ' + senderName : ''} (raw).`);
-        tryHiiReply();
+        log('Server asked for login (raw), sending command...')
+        setTimeout(sendLogin, 1500)
       }
       // relay -> Discord, with the sender's in-game name when known
-      const out = senderName ? `<${senderName}> ${s}` : prettyRelay(s);
-      sendToDiscord(sanitize(out));
+      const out = senderName ? `<${senderName}> ${s}` : prettyRelay(s)
+      sendToDiscord(sanitize(out))
     } catch (e) { /* ignore */ }
-  });
+  })
 
   bot.on('kicked', (reason) => {
-    log('KICKED: ' + JSON.stringify(reason).slice(0, 300));
-    scheduleReconnect();
-  });
+    log('KICKED: ' + JSON.stringify(reason).slice(0, 300))
+    scheduleReconnect()
+  })
 
-  bot.on('error', (err) => log('ERROR: ' + err.message));
+  bot.on('error', (err) => log('ERROR: ' + err.message))
   bot.on('end', () => {
-    log('Connection ended.');
-    scheduleReconnect();
-  });
+    log('Connection ended.')
+    scheduleReconnect()
+  })
 
-  // Totem pop detection: entity_status 35 on our own entity = a totem just popped.
+  // Totem pop detection: entity_status 35 on our own entity = a totem just
+  // popped. While the PvP brain is fighting it re-equips the offhand
+  // itself; the Madara refill below only runs while idle.
   bot._client.on('entity_status', (packet) => {
     try {
-      if (!bot || !bot.entity) return;
+      if (!bot || !bot.entity) return
       if (packet.entityId === bot.entity.id && packet.entityStatus === 35) {
-        log('Totem popped! Scheduling replacement...');
-        scheduleTotemRefill();
+        if (!brainBusy()) {
+          log('Totem popped! Scheduling replacement...')
+          scheduleTotemRefill()
+        }
       }
     } catch (e) { /* ignore */ }
-  });
+  })
 }
 
-/* ---------- anti-AFK: gentle look-around ---------- */
-function startAntiAfk() {
-  if (afkTimer) clearInterval(afkTimer);
+/* ---------- whisper control (Rafi's duel flow) ---------- */
+// He TPs the bot to himself in-game, then whispers it:
+//   /msg Madara_1ea pvp fight   -> the bot fights the SENDER
+//   /msg Madara_1ea pvp stop    -> the bot stands down
+// Only allowlisted in-game names (MC_PVP_ALLOWLIST) may do this. The same
+// whisper can arrive via the 'whisper' event AND the messagestr fallback
+// on some servers — dedupe identical commands for a few seconds.
+let lastWhisperCmd = { key: '', at: 0 }
+function handleWhisper (username, message, via) {
+  try {
+    if (!username || username === config.username) return
+    const cmd = parseWhisperCommand(message)
+    if (!cmd) return // an ordinary whisper, not a command — stay silent
+    if (!isAllowedMcName(username, config.pvpAllowlist)) {
+      log(`Whisper command from NON-allowlisted ${username} ignored (${via}).`)
+      return
+    }
+    const key = username.toLowerCase() + '|' + cmd.action
+    const now = Date.now()
+    if (lastWhisperCmd.key === key && now - lastWhisperCmd.at < 3000) return
+    lastWhisperCmd = { key, at: now }
+    if (!brain || !bot || !bot.entity) return
+    if (cmd.action === 'fight-sender') {
+      const entity = brain.findPlayer(username)
+      if (entity) {
+        brain.startFight(entity, `whisper:${username}`)
+        log(`Whisper duel: ${username} -> pvp fight (via ${via}).`)
+      } else {
+        log(`Whisper duel: ${username} asked to fight but is not visible.`)
+      }
+    } else if (cmd.action === 'stop') {
+      brain.stopAll(`whisper:${username}`)
+      log(`Whisper duel: ${username} -> pvp stop (via ${via}).`)
+    }
+  } catch (e) { log('Whisper handler error: ' + e.message) }
+}
+
+/* ---------- anti-AFK: gentle look-around (minimal, idle only) ---------- */
+function startAntiAfk () {
+  if (afkTimer) clearInterval(afkTimer)
   afkTimer = setInterval(() => {
-    if (!bot || !bot.entity || behaviorBusy) return;
+    if (!bot || !bot.entity || brainBusy()) return
     try {
-      const yaw = bot.entity.yaw + (Math.random() - 0.5) * 1.2;
-      const pitch = (Math.random() - 0.5) * 0.4;
-      bot.look(yaw, pitch, true);
+      const yaw = bot.entity.yaw + (Math.random() - 0.5) * 1.2
+      const pitch = (Math.random() - 0.5) * 0.4
+      bot.look(yaw, pitch, true)
     } catch (e) { /* ignore */ }
-  }, 30000);
+  }, 30000)
 }
 
-/* ---------- lively behavior: crouch + greet ---------- */
-let behaviorBusy = false;
-const greetCooldown = {}; // username -> last greet timestamp
+/* ---------- auto-totem while idle (kept from Madara) ---------- */
+// Keeps Totems of Undying in both hands while the bot stands at its spot.
+// Gated to idle: in a fight the PvP brain owns the hands (sword + offhand
+// totem) and re-equips its own totem.
+const TOTEM_REPLACE_DELAY_MS = 6000 // configurable replacement delay
+let totemRefillTimer = null
+let totemRefillBusy = false
+let lastNoTotemLogAt = 0
 
-async function doubleCrouch() {
-  if (behaviorBusy || !bot || !bot.entity) return;
-  behaviorBusy = true;
+function handHasTotem (dest) {
   try {
-    for (let i = 0; i < 2; i++) {
-      bot.setControlState('sneak', true);
-      await sleep(700);
-      bot.setControlState('sneak', false);
-      await sleep(700);
-    }
-    log('Did double-crouch.');
-  } catch (e) { /* ignore */ }
-  behaviorBusy = false;
-}
-
-function nearestPlayer(maxDist) {
-  let best = null, bestD = maxDist;
-  for (const name of Object.keys(bot.players)) {
-    if (name === bot.username) continue;
-    const p = bot.players[name];
-    if (!p || !p.entity || !bot.entity) continue;
-    const d = bot.entity.position.distanceTo(p.entity.position);
-    if (d < bestD) { bestD = d; best = p; }
-  }
-  return best;
-}
-
-async function greetIfPlayerNear() {
-  if (behaviorBusy || !bot || !bot.entity) return;
-  const p = nearestPlayer(6);
-  if (!p) return;
-  const now = Date.now();
-  if (now - (greetCooldown[p.username] || 0) < 60000) return; // once per minute per player
-  greetCooldown[p.username] = now;
-  behaviorBusy = true;
-  try {
-    await bot.lookAt(p.entity.position.offset(0, 1.5, 0));
-    log(`Greeting ${p.username}: looking + double-crouch.`);
-    await sleep(500);
-    for (let i = 0; i < 2; i++) {
-      bot.setControlState('sneak', true);
-      await sleep(700);
-      bot.setControlState('sneak', false);
-      await sleep(700);
-    }
-  } catch (e) { /* ignore */ }
-  behaviorBusy = false;
-}
-
-function startBehavior() {
-  clearBehavior();
-  // every 2 minutes: crouch twice (sit-stand, sit-stand)
-  behaviorTimers.push(setInterval(() => doubleCrouch(), 2 * 60 * 1000));
-  // every 3 seconds: if a player is within 6 blocks, look at them + double-crouch
-  behaviorTimers.push(setInterval(() => greetIfPlayerNear(), 3000));
-  // every 15 seconds: top up empty hands with totems (covers "became empty" cases)
-  behaviorTimers.push(setInterval(() => refillTotems(), 15000));
-  log('Behavior timers started (double-crouch every 2 min, greet nearby players).');
-}
-function clearBehavior() {
-  behaviorTimers.forEach(clearInterval);
-  behaviorTimers = [];
-  behaviorBusy = false;
-}
-
-/* ---------- auto-totem: keep Totems of Undying in both hands ---------- */
-const TOTEM_REPLACE_DELAY_MS = 6000; // configurable replacement delay
-let totemRefillTimer = null;
-let totemRefillBusy = false;
-let lastNoTotemLogAt = 0;
-
-function handHasTotem(dest) {
-  try {
-    if (!bot || !bot.inventory) return false;
-    const slot = bot.getEquipmentDestSlot(dest); // 'off-hand' or 'hand'
-    const item = bot.inventory.slots[slot];
-    return !!item && item.name === 'totem_of_undying';
-  } catch (e) { return false; }
+    if (!bot || !bot.inventory) return false
+    const slot = bot.getEquipmentDestSlot(dest) // 'off-hand' or 'hand'
+    const item = bot.inventory.slots[slot]
+    return !!item && item.name === 'totem_of_undying'
+  } catch (e) { return false }
 }
 
 // Find a totem in the main inventory, ignoring ones already equipped,
 // so we never steal a totem from one hand to fill the other.
-function findSpareTotem() {
+function findSpareTotem () {
   try {
-    if (!bot || !bot.inventory) return null;
-    const skip = new Set();
-    try { skip.add(bot.getEquipmentDestSlot('off-hand')); } catch (e) {}
-    try { skip.add(bot.getEquipmentDestSlot('hand')); } catch (e) {}
-    return bot.inventory.items().find((it) => it && it.name === 'totem_of_undying' && !skip.has(it.slot)) || null;
-  } catch (e) { return null; }
+    if (!bot || !bot.inventory) return null
+    const skip = new Set()
+    try { skip.add(bot.getEquipmentDestSlot('off-hand')) } catch (e) {}
+    try { skip.add(bot.getEquipmentDestSlot('hand')) } catch (e) {}
+    return bot.inventory.items().find((it) => it && it.name === 'totem_of_undying' && !skip.has(it.slot)) || null
+  } catch (e) { return null }
 }
 
 // One refill pass: offhand first (survival priority), then main hand.
 // Lock-guarded so repeated pops can never overlap; no totems -> do nothing.
-async function refillTotems() {
-  if (totemRefillBusy) return;
-  if (!bot || !bot.entity || !bot.inventory) return;
-  totemRefillBusy = true;
+async function refillTotems () {
+  if (totemRefillBusy) return
+  if (!bot || !bot.entity || !bot.inventory) return
+  if (brainBusy()) return // the brain owns the hands while active
+  totemRefillBusy = true
   try {
     for (const dest of ['off-hand', 'hand']) {
-      if (handHasTotem(dest)) continue;
-      const totem = findSpareTotem();
+      if (handHasTotem(dest)) continue
+      const totem = findSpareTotem()
       if (!totem) {
-        const nowL = Date.now();
+        const nowL = Date.now()
         if (nowL - lastNoTotemLogAt > 5 * 60 * 1000) {
-          lastNoTotemLogAt = nowL;
-          log(`Auto-totem: no spare totem for ${dest} (waiting for one).`);
+          lastNoTotemLogAt = nowL
+          log(`Auto-totem: no spare totem for ${dest} (waiting for one).`)
         }
-        continue;
+        continue
       }
       try {
-        await bot.equip(totem, dest);
-        log(`Auto-totem: equipped totem to ${dest}.`);
+        await bot.equip(totem, dest)
+        log(`Auto-totem: equipped totem to ${dest}.`)
       } catch (e) {
-        log(`Auto-totem equip failed (${dest}): ${e.message}`);
+        log(`Auto-totem equip failed (${dest}): ${e.message}`)
       }
     }
   } catch (e) { /* ignore */ }
-  totemRefillBusy = false;
+  totemRefillBusy = false
 }
 
 // Debounced: pops during the wait collapse into a single refill pass.
-function scheduleTotemRefill() {
-  if (totemRefillTimer) return; // already scheduled
+function scheduleTotemRefill () {
+  if (totemRefillTimer) return // already scheduled
   totemRefillTimer = setTimeout(() => {
-    totemRefillTimer = null;
-    refillTotems();
-  }, TOTEM_REPLACE_DELAY_MS);
+    totemRefillTimer = null
+    refillTotems()
+  }, TOTEM_REPLACE_DELAY_MS)
+}
+
+function startTotemUpkeep () {
+  if (totemTimer) clearInterval(totemTimer)
+  // every 15 seconds: top up empty hands with totems while idle
+  totemTimer = setInterval(() => refillTotems(), 15000)
 }
 
 /* ---------- reconnect logic ---------- */
-function scheduleReconnect() {
-  if (reconnectScheduled) return; // kick+end (or the watchdog) can race here
-  reconnectScheduled = true;
-  if (afkTimer) { clearInterval(afkTimer); afkTimer = null; }
-  clearBehavior();
-  try { if (bot) bot.quit(); } catch (e) {}
-  bot = null;
-  failCount++;
-  // Sir's retry ladder (2026-11-10): 5s, 10s, 30s, 1m, then every 5 minutes.
-  const RETRY_LADDER_MS = [5000, 10000, 30000, 60000, 300000];
-  const delay = RETRY_LADDER_MS[Math.min(failCount, RETRY_LADDER_MS.length) - 1];
-  log(`Reconnecting in ${delay / 1000}s ... (consecutive fails: ${failCount})`);
-  setTimeout(() => { reconnectScheduled = false; startBot(); }, delay);
+function scheduleReconnect () {
+  if (reconnectScheduled) return // kick+end (or the watchdog) can race here
+  reconnectScheduled = true
+  if (afkTimer) { clearInterval(afkTimer); afkTimer = null }
+  if (totemTimer) { clearInterval(totemTimer); totemTimer = null }
+  try { if (bot) bot.quit() } catch (e) {}
+  bot = null
+  brain = null
+  failCount++
+  // Rafi's retry ladder (2026-11-10): 5s, 10s, 30s, 1m, then every 5 minutes.
+  const RETRY_LADDER_MS = [5000, 10000, 30000, 60000, 300000]
+  const delay = RETRY_LADDER_MS[Math.min(failCount, RETRY_LADDER_MS.length) - 1]
+  log(`Reconnecting in ${delay / 1000}s ... (consecutive fails: ${failCount})`)
+  setTimeout(() => { reconnectScheduled = false; startBot() }, delay)
 }
 
-/* ---------- Discord bridge (remote control + chat relay) ---------- */
-let discordClient = null;
-let discordChannel = null;
-let lastMadaraPingAt = 0; // anti-spam cooldown for Discord-side Madara mention alerts
-let lastMcMentionPingAt = 0; // anti-spam cooldown for in-game (MC) mention alerts: 10 min
-let lastJoinPingAt = 0; // anti-spam cooldown for join notifications
+/* ---------- Discord bridge (chat relay + #bot-panel) ---------- */
+let discordClient = null
+let discordChannel = null
 
-function sanitize(s) {
-  return String(s).replace(/@/g, '@\u200b'); // stop @everyone / @here pings
+function sanitize (s) {
+  return String(s).replace(/@/g, '@\u200b') // stop @everyone / @here pings
 }
-function sendToDiscord(text) {
-  if (!discordChannel) return;
-  discordChannel.send(String(text).slice(0, 1900)).catch(() => {});
-}
-// Mention the owner on Discord (fire-and-forget).
-function pingOwner(text) {
-  if (!config.discordOwnerId) return;
-  sendToDiscord(`<@${config.discordOwnerId}> ${text}`);
-}
-// Awaitable version for shutdown paths where the process is about to exit.
-async function pingOwnerAsync(text) {
-  if (!config.discordOwnerId || !discordChannel) return false;
-  try {
-    await discordChannel.send(`<@${config.discordOwnerId}> ${text}`.slice(0, 1900));
-    return true;
-  } catch (e) { return false; }
-}
-
-// Track messages the bot itself sends, so the relay doesn't echo them back.
-let lastBotSay = { text: '', at: 0 };
-function botSay(text) {
-  lastBotSay = { text: String(text), at: Date.now() };
-  bot.chat(text);
+function sendToDiscord (text) {
+  if (!discordChannel) return
+  discordChannel.send(String(text).slice(0, 1900)).catch(() => {})
 }
 
 // Turn HavenCraft-style "RANK name » message" into clean "<name> message".
 // Anything else (auctions, join/leave, system) is passed through as-is.
-function prettyRelay(s) {
-  const clean = String(s).replace(/§[0-9a-fk-or]/gi, '');
-  const m = clean.match(/^(.*?)»\s*([\s\S]*)$/);
+function prettyRelay (s) {
+  const clean = String(s).replace(/§[0-9a-fk-or]/gi, '')
+  const m = clean.match(/^(.*?)»\s*([\s\S]*)$/)
   if (m) {
-    const tokens = m[1].trim().split(/\s+/);
-    let name = tokens[tokens.length - 1] || '';
-    name = name.replace(/^[^a-zA-Z0-9_]+/, '').replace(/[^a-zA-Z0-9_]+$/, '');
-    if (name) return `<${name}> ${m[2].trim()}`;
+    const tokens = m[1].trim().split(/\s+/)
+    let name = tokens[tokens.length - 1] || ''
+    name = name.replace(/^[^a-zA-Z0-9_]+/, '').replace(/[^a-zA-Z0-9_]+$/, '')
+    if (name) return `<${name}> ${m[2].trim()}`
   }
-  return clean.trim();
+  return clean.trim()
 }
 
 // Detect a private message TO the bot: /msg or /r (reply).
 // Formats: "[RANK ~Name [RANK] -> me]", "[RANK ~Name -> Madara_1ea]",
 // "Name -> me: text", "Name whispers: text" / "Name whispers to you: text".
 // Returns { sender, text } or null. Color codes are stripped first.
-function privateMsgInfo(s) {
+// (Copied from the live build; the merged build uses it for whisper
+// CONTROL instead of owner pings.)
+function privateMsgInfo (s) {
   try {
-    var clean = String(s || '').replace(/§[0-9a-fk-or]/gi, '');
-    var me = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    var m = clean.match(new RegExp('\\[(.*)->\\s*(?:me|' + me + ')\\]', 'i'));
+    var clean = String(s || '').replace(/§[0-9a-fk-or]/gi, '')
+    var me = config.username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    var m = clean.match(new RegExp('\\[(.*)->\\s*(?:me|' + me + ')\\]', 'i'))
     if (m) {
-      var inner = m[1].replace(/\[[^\]]*\]/g, ' ');
-      var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/);
-      var name = null;
+      var inner = m[1].replace(/\[[^\]]*\]/g, ' ')
+      var toks = inner.replace(/[~.]/g, ' ').trim().split(/\s+/)
+      var name = null
       for (var i = toks.length - 1; i >= 0; i--) {
-        var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '');
-        if (/^[A-Za-z0-9_]{3,16}$/.test(t)) { name = t; break; }
+        var t = toks[i].replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '')
+        if (/^[A-Za-z0-9_]{3,16}$/.test(t)) { name = t; break }
       }
-      var text = clean.replace(new RegExp('^.*->\\s*(?:me|' + me + ')\\]\\s*', 'i'), '').trim();
-      return { sender: name, text: text || clean };
+      var text = clean.replace(new RegExp('^.*->\\s*(?:me|' + me + ')\\]\\s*', 'i'), '').trim()
+      return { sender: name, text: text || clean }
     }
-    m = clean.match(new RegExp('^\\s*([A-Za-z0-9_]{3,16})\\s*->\\s*(?:me|' + me + ')\\s*:?\\s*([\\s\\S]*)$', 'i'));
-    if (m) return { sender: m[1], text: m[2].trim() };
-    m = clean.match(/^\s*([A-Za-z0-9_]{3,16})\s+whispers(?:\s+to\s+you)?\s*:\s*([\s\S]*)$/i);
-    if (m) return { sender: m[1], text: m[2].trim() };
+    m = clean.match(new RegExp('^\\s*([A-Za-z0-9_]{3,16})\\s*->\\s*(?:me|' + me + ')\\s*:?\\s*([\\s\\S]*)$', 'i'))
+    if (m) return { sender: m[1], text: m[2].trim() }
+    m = clean.match(/^\s*([A-Za-z0-9_]{3,16})\s+whispers(?:\s+to\s+you)?\s*:\s*([\s\S]*)$/i)
+    if (m) return { sender: m[1], text: m[2].trim() }
   } catch (e) { /* ignore */ }
-  return null;
+  return null
 }
 
 // Resolve a chat packet sender UUID -> player name via the tab list.
-function nameForSender(sender) {
-  if (!sender || !bot || !bot.players) return null;
-  const su = String(sender).toLowerCase().replace(/-/g, '');
-  if (!su) return null;
+function nameForSender (sender) {
+  if (!sender || !bot || !bot.players) return null
+  const su = String(sender).toLowerCase().replace(/-/g, '')
+  if (!su) return null
   for (const name of Object.keys(bot.players)) {
-    const p = bot.players[name];
-    const pu = String((p && p.uuid) || '').toLowerCase().replace(/-/g, '');
-    if (pu && pu === su) return name;
+    const p = bot.players[name]
+    const pu = String((p && p.uuid) || '').toLowerCase().replace(/-/g, '')
+    if (pu && pu === su) return name
   }
-  return null;
+  return null
 }
 
-async function startDiscord() {
-  if (!config.discordToken) {
-    log('Discord bridge disabled (DISCORD_MC_TOKEN not set).');
-    return;
+// Execute a parsed PvP panel command against the brain. Returns a short
+// human-readable outcome for the panel reply.
+function runPanelPvp (cmd, source) {
+  if (!bot || !bot.entity || !brain) return 'MC bot is not connected right now, try again in a bit.'
+  if (cmd.action === 'stop') {
+    brain.stopAll(source)
+    return 'PvP stopped.'
   }
-  let Discord;
+  if (cmd.action === 'come') {
+    // The panel operator has no in-game body; come to the first online
+    // allowlisted in-game player instead.
+    for (const name of config.pvpAllowlist) {
+      if (brain.comeToPlayerByName(name, source)) return `Coming to ${name}.`
+    }
+    return 'No allowlisted player is online in-game right now.'
+  }
+  if (cmd.action === 'fight') {
+    return brain.fightPlayerByName(cmd.target, source)
+      ? `Fighting ${cmd.target}.`
+      : `${cmd.target} is not visible to the bot right now.`
+  }
+  if (cmd.action === 'combo') {
+    return brain.comboPlayerByName(cmd.target, source)
+      ? `Combo started on ${cmd.target}.`
+      : `${cmd.target} is not visible to the bot right now.`
+  }
+  return 'Unknown PvP command.'
+}
+
+async function startDiscord () {
+  if (!config.discordToken) {
+    log('Discord bridge disabled (DISCORD_MC_TOKEN not set).')
+    return
+  }
+  let Discord
   try {
-    Discord = require('discord.js');
+    Discord = require('discord.js')
   } catch (e) {
-    log('discord.js not installed, Discord bridge disabled.');
-    return;
+    log('discord.js not installed, Discord bridge disabled.')
+    return
   }
   discordClient = new Discord.Client({
     intents: [
       Discord.GatewayIntentBits.Guilds,
       Discord.GatewayIntentBits.GuildMessages,
-      Discord.GatewayIntentBits.MessageContent,
-    ],
-  });
+      Discord.GatewayIntentBits.MessageContent
+    ]
+  })
 
   discordClient.on('ready', async () => {
-    log(`Discord logged in as ${discordClient.user.tag}`);
+    log(`Discord logged in as ${discordClient.user.tag}`)
     if (!config.discordChannelId) {
-      log('DISCORD_CHANNEL_ID not set, bridge channel unknown.');
-      return;
+      log('DISCORD_CHANNEL_ID not set, bridge channel unknown.')
+      return
     }
     try {
-      discordChannel = await discordClient.channels.fetch(config.discordChannelId);
-      log('Discord bridge channel ready.');
-      sendToDiscord('🟢 MC bridge online.');
+      discordChannel = await discordClient.channels.fetch(config.discordChannelId)
+      log('Discord bridge channel ready.')
+      sendToDiscord('🟢 MC bridge online.')
     } catch (e) {
-      log('Discord channel fetch failed: ' + e.message);
+      log('Discord channel fetch failed: ' + e.message)
     }
-  });
+  })
 
   discordClient.on('messageCreate', async (msg) => {
     try {
-      if (!msg || !msg.author || msg.author.bot) return;
-      if (config.discordChannelId && msg.channelId !== config.discordChannelId) return;
-      // Madara/Admin mention alert: anyone typing "madara"/"madara_1ea"/"admin" pings the owner.
-      // Checked before the owner-only gate so other people can call for him too.
-      const contentLower = (msg.content || '').toLowerCase();
-      if (config.discordOwnerId && (contentLower.includes('madara') || contentLower.includes('admin'))) {
-        const now = Date.now();
-        if (now - lastMadaraPingAt > 5 * 60 * 1000) { // 5-min cooldown against ping spam
-          lastMadaraPingAt = now;
-          await msg.reply(`<@${config.discordOwnerId}> — someone mentioned Madara! 👀`).catch(() => {});
-          log('Madara mention alert sent.');
-        }
-        return; // call-outs are not relayed to the game
+      if (!msg || !msg.author || msg.author.bot) return
+      if (config.discordChannelId && msg.channelId !== config.discordChannelId) return
+      // Owner + allowlist only. (The live build's mention alerts — anyone
+      // typing "madara"/"admin" pinging the owner — are REMOVED.)
+      if (!isAllowedPanelUser(msg.author.id, config)) return
+      const parsed = parsePanelCommand(msg.content)
+      if (parsed.type === 'ignore') return
+      if (parsed.type === 'pvp') {
+        const outcome = runPanelPvp(parsed, `discord:${msg.author.username || msg.author.id}`)
+        log(`Discord panel PvP: ${msg.content} -> ${outcome}`)
+        await msg.reply(outcome).catch(() => {})
+        return
       }
-      // Owner + allowlist only. Mention alerts above stay owner-only.
-      if (config.discordOwnerId && msg.author.id !== config.discordOwnerId && !config.discordAllowedIds.includes(msg.author.id)) return;
-      const text = (msg.content || '').trim();
-      if (!text) return;
-      const low = text.toLowerCase();
-
-      // Playerlist -> reply with online players (not sent to the game)
-      if (low === 'playerlist' || low === '!players' || low === '!p') {
-        await replyPlayerList(msg);
-        return;
+      if (parsed.type === 'unknown-command') {
+        await msg.reply('Commands: !pvp fight <player> | !pvp stop | !pvp come | !pvp combo <player> | !say <msg> | !cmd <command>').catch(() => {})
+        return
       }
-
-      // Status -> reply with the sender's surroundings (not sent to the game)
-      if (low === 'status' || low === '!s') {
-        await replyStatus(msg);
-        return;
-      }
-
-      let mcText = null;
-      if (low.startsWith('!say ')) {
-        mcText = text.slice(5).trim(); // starts with / => runs as a command
-      } else if (low.startsWith('!cmd ')) {
-        mcText = '/' + text.slice(5).trim().replace(/^\/+/, '');
-      } else if (low.startsWith('!')) {
-        await msg.reply('Commands: Playerlist | !p | Status | !s | !say <msg> | !cmd <command>').catch(() => {});
-        return;
-      } else {
-        // direct mode: plain message -> game chat (no !say needed)
-        mcText = text.replace(/\s*\n\s*/g, ' ').trim();
-      }
-      if (!mcText) return;
+      // !say / !cmd / plain-message direct mode -> game chat (bridge basics)
+      let mcText = null
+      if (parsed.type === 'say') mcText = parsed.text
+      else if (parsed.type === 'cmd') mcText = '/' + parsed.text
+      else if (parsed.type === 'relay') mcText = parsed.text
+      if (!mcText) return
       if (!bot || !bot.entity) {
-        await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
-        return;
+        await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {})
+        return
       }
-      botSay(mcText);
-      log(`Discord -> MC: ${mcText.slice(0, 80)}`);
-      await msg.react('✅').catch(() => {});
+      botSay(mcText)
+      log(`Discord -> MC: ${mcText.slice(0, 80)}`)
+      await msg.react('✅').catch(() => {})
     } catch (e) {
-      log('Discord message handler error: ' + e.message);
+      log('Discord message handler error: ' + e.message)
     }
-  });
+  })
 
-// ==== PLAYERLIST-CARD-START ====
-// Designed Playerlist card: renders the online list as a PNG image in the
-// HavenCraft purple style (Sir approved the cropped grid design 2026-11-09).
-// Heads come from mc-heads (Java skins; Bedrock/unknown players get its
-// default Steve face). Any failure anywhere falls back to the text list.
-const CARD_MAX_PLAYERS = parseInt(process.env.MC_MAX_PLAYERS || '50', 10);
-const headCache = new Map();
-let sharpModule; // undefined = not tried yet, null = unavailable
-
-function setupCardFonts() {
+  discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)))
   try {
-    const fs = require('fs');
-    const os = require('os');
-    const path = require('path');
-    const dir = path.join(__dirname, 'fonts');
-    if (!fs.existsSync(dir)) return;
-    const conf = path.join(os.tmpdir(), 'mc-bot-fonts.conf');
-    fs.writeFileSync(
-      conf,
-      `<?xml version="1.0"?><fontconfig><dir>${dir}</dir><cachedir>${os.tmpdir()}</cachedir></fontconfig>`
-    );
-    process.env.FONTCONFIG_FILE = conf;
-  } catch (_) {
-    /* system fonts are fine too */
-  }
-}
-
-function loadSharp() {
-  if (sharpModule !== undefined) return sharpModule;
-  try {
-    setupCardFonts();
-    sharpModule = require('sharp');
-  } catch (_) {
-    sharpModule = null;
-  }
-  return sharpModule;
-}
-
-async function fetchHeadBase64(name) {
-  if (headCache.has(name)) return headCache.get(name);
-  let out = null;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 2500);
-    const res = await fetch('https://mc-heads.net/avatar/' + encodeURIComponent(name) + '/100', {
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    if (res.ok) {
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > 100) out = buf.toString('base64');
-    }
-  } catch (_) {
-    /* letter tile fallback */
-  }
-  headCache.set(name, out);
-  return out;
-}
-
-function cardPingColor(ping) {
-  if (ping === null) return '#9ca3af';
-  if (ping < 50) return '#4ade80';
-  if (ping < 120) return '#fbbf24';
-  return '#f87171';
-}
-
-function xmlEsc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-async function buildPlayerlistCard(players) {
-  const sharp = loadSharp();
-  if (!sharp) return null;
-  const W = 1280;
-  const PAD = 36;
-  const GAP = 16;
-  const CELL_W = (W - PAD * 2 - GAP) / 2;
-  const CELL_H = 78;
-  const GRID_Y = 100;
-  const rows = Math.max(1, Math.ceil(players.length / 2));
-  const H = GRID_Y + rows * CELL_H + (rows - 1) * GAP + 30;
-  const heads = await Promise.all(players.map((p) => fetchHeadBase64(p.name)));
-  const tileColors = ['#4c1d95', '#6d28d9', '#7c3aed', '#831843', '#581c87', '#701a75', '#5b21b6', '#9333ea'];
-
-  let cells = '';
-  players.forEach((p, i) => {
-    const x = PAD + (i % 2) * (CELL_W + GAP);
-    const y = GRID_Y + Math.floor(i / 2) * (CELL_H + GAP);
-    const pc = cardPingColor(p.ping);
-    const pingText = p.ping === null ? '? ping' : `${p.ping} ping`;
-    const head = heads[i]
-      ? `<clipPath id="hc${i}"><rect x="${x + 13}" y="${y + 13}" width="52" height="52" rx="10"/></clipPath><image x="${x + 13}" y="${y + 13}" width="52" height="52" clip-path="url(#hc${i})" href="data:image/png;base64,${heads[i]}"/>`
-      : `<rect x="${x + 13}" y="${y + 13}" width="52" height="52" rx="10" fill="${tileColors[i % tileColors.length]}"/><text x="${x + 39}" y="${y + 51}" font-family="Poppins" font-weight="700" font-size="26" fill="#ffffff" text-anchor="middle">${xmlEsc(p.name[0].toUpperCase())}</text>`;
-    cells += `
-    <g>
-      <rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}" rx="16" fill="#12121f" stroke="#26263f"/>
-      ${head}
-      <text x="${x + 82}" y="${y + 50}" font-family="Poppins" font-weight="600" font-size="25" fill="#f4f4fa">${xmlEsc(p.name)}</text>
-      <text x="${x + CELL_W - 24}" y="${y + 50}" font-family="Poppins" font-weight="600" font-size="23" fill="${pc}" text-anchor="end">${pingText}</text>
-    </g>`;
-  });
-
-  const badgeText = `${players.length} / ${CARD_MAX_PLAYERS}`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect x="2" y="2" width="${W - 4}" height="${H - 4}" rx="26" fill="#0a0a15" stroke="#3b2d5c" stroke-width="2"/>
-  <text x="${PAD}" y="60" font-family="Poppins" font-weight="700" font-size="40" fill="#ffffff">Online Players</text>
-  <rect x="${W - PAD - 132}" y="24" width="132" height="46" rx="23" fill="none" stroke="#22c55e" stroke-width="2"/>
-  <text x="${W - PAD - 66}" y="57" font-family="Poppins" font-weight="600" font-size="24" fill="#4ade80" text-anchor="middle">${badgeText}</text>
-  ${cells}
-</svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-// ==== PLAYERLIST-CARD-END ====
-
-// Status card: same style as the Playerlist card (Sir approved the demo
-// 2026-11-09). Returns a PNG buffer, or null so the caller falls back to text.
-async function buildStatusCard({ position, block, nearbyPlayers, entities }) {
-  const sharp = loadSharp();
-  if (!sharp) return null;
-  const W = 1280;
-  const PAD = 36;
-  const panelW = (W - PAD * 2 - 16) / 2;
-  const playersJoined = nearbyPlayers.length ? nearbyPlayers.join(', ') : 'None nearby';
-  const playersText = playersJoined.length > 90 ? playersJoined.slice(0, 90) + '…' : playersJoined;
-
-  let entitiesSection = '';
-  let H;
-  if (entities.length) {
-    const COLS = 3;
-    const GAP = 14;
-    const CHIP_W = (W - PAD * 2 - (COLS - 1) * GAP) / COLS;
-    const CHIP_H = 58;
-    const GRID_Y = 330;
-    let chips = '';
-    entities.forEach(([name, count], i) => {
-      const cx = PAD + (i % COLS) * (CHIP_W + GAP);
-      const cy = GRID_Y + Math.floor(i / COLS) * (CHIP_H + GAP);
-      const countText = `${count}x`;
-      const pillW = Math.max(56, countText.length * 13 + 26);
-      chips += `
-      <g>
-        <rect x="${cx}" y="${cy}" width="${CHIP_W}" height="${CHIP_H}" rx="14" fill="#12121f" stroke="#26263f"/>
-        <text x="${cx + 18}" y="${cy + 37}" font-family="Poppins" font-weight="500" font-size="20" fill="#f4f4fa">${xmlEsc(name)}</text>
-        <rect x="${cx + CHIP_W - 18 - pillW}" y="${cy + 14}" width="${pillW}" height="30" rx="15" fill="#3b1470"/>
-        <text x="${cx + CHIP_W - 18 - pillW / 2}" y="${cy + 36}" font-family="Poppins" font-weight="700" font-size="17" fill="#d8b4fe" text-anchor="middle">${countText}</text>
-      </g>`;
-    });
-    const rows = Math.ceil(entities.length / COLS);
-    H = GRID_Y + rows * CHIP_H + (rows - 1) * GAP + 32;
-    entitiesSection = `
-  <rect x="${PAD}" y="296" width="7" height="26" rx="3" fill="#a855f7"/>
-  <text x="${PAD + 18}" y="318" font-family="Poppins" font-weight="700" font-size="23" fill="#ffffff">Nearby Entities</text>
-  <text x="${W - PAD}" y="318" font-family="Poppins" font-weight="500" font-size="18" fill="#8f8fb0" text-anchor="end">${entities.length} types</text>
-  ${chips}`;
-  } else {
-    H = 330;
-    entitiesSection = `
-  <rect x="${PAD}" y="296" width="7" height="26" rx="3" fill="#a855f7"/>
-  <text x="${PAD + 18}" y="318" font-family="Poppins" font-weight="700" font-size="23" fill="#ffffff">Nearby Entities</text>
-  <text x="${W - PAD}" y="318" font-family="Poppins" font-weight="500" font-size="18" fill="#8f8fb0" text-anchor="end">None nearby</text>`;
-  }
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect x="2" y="2" width="${W - 4}" height="${H - 4}" rx="26" fill="#0a0a15" stroke="#3b2d5c" stroke-width="2"/>
-  <text x="${PAD}" y="60" font-family="Poppins" font-weight="700" font-size="40" fill="#ffffff">Status</text>
-  <rect x="${W - PAD - 168}" y="24" width="168" height="46" rx="23" fill="none" stroke="#22c55e" stroke-width="2"/>
-  <circle cx="${W - PAD - 140}" cy="47" r="6" fill="#4ade80"/>
-  <text x="${W - PAD - 124}" y="56" font-family="Poppins" font-weight="600" font-size="21" fill="#4ade80">In Game</text>
-  <rect x="${PAD}" y="92" width="${panelW}" height="98" rx="16" fill="#12121f" stroke="#26263f"/>
-  <text x="${PAD + 22}" y="126" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">POSITION</text>
-  <text x="${PAD + 22}" y="168" font-family="Poppins" font-weight="600" font-size="31" fill="#f4f4fa">${xmlEsc(position)}</text>
-  <rect x="${PAD + panelW + 16}" y="92" width="${panelW}" height="98" rx="16" fill="#12121f" stroke="#26263f"/>
-  <text x="${PAD + panelW + 38}" y="126" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">STANDING ON</text>
-  <text x="${PAD + panelW + 38}" y="168" font-family="Poppins" font-weight="600" font-size="31" fill="#f4f4fa">${xmlEsc(block)}</text>
-  <rect x="${PAD}" y="206" width="${W - PAD * 2}" height="66" rx="16" fill="#12121f" stroke="#26263f"/>
-  <text x="${PAD + 22}" y="247" font-family="Poppins" font-weight="600" font-size="16" fill="#a78bfa" letter-spacing="3">NEARBY PLAYERS</text>
-  <text x="${PAD + 268}" y="248" font-family="Poppins" font-weight="500" font-size="22" fill="${nearbyPlayers.length ? '#f4f4fa' : '#8f8fb0'}">${xmlEsc(playersText)}</text>
-  ${entitiesSection}
-</svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
-async function replyPlayerList(msg) {
-  if (!bot || !bot.entity) {
-    await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
-    return;
-  }
-  // Every player in the tab list, no exclusions — including the bot itself.
-  // A-Z order, case-insensitive (Sir's list format, 2026-11-09).
-  const names = Object.keys(bot.players || {}).sort((a, b) =>
-    a.toLowerCase().localeCompare(b.toLowerCase())
-  );
-  const players = names.map((n) => {
-    const p = bot.players[n];
-    return { name: n, ping: p && typeof p.ping === 'number' ? p.ping : null };
-  });
-  // Designed image card first; the plain text list stays as the fallback.
-  try {
-    const card = await buildPlayerlistCard(players);
-    if (card) {
-      await msg.reply({ files: [{ attachment: card, name: 'playerlist.png' }] });
-      log(`Discord playerlist card -> ${players.length} players.`);
-      return;
-    }
+    await discordClient.login(config.discordToken)
   } catch (e) {
-    log('Playerlist card failed, using text: ' + e.message);
-  }
-  const entries = players.map((p) => (p.ping === null ? `${p.name}-?ping` : `${p.name}-${p.ping}ping`));
-  const text = entries.length
-    ? `Online Players: ${entries.join(', ')}`
-    : 'Online Players: N/A';
-  await msg.reply(text.slice(0, 1900)).catch(() => {});
-  log(`Discord playerlist -> ${entries.length} players.`);
-}
-
-// The command sender's known in-game accounts, in order. Status always
-// reports the owner's surroundings, whoever on the allowlist asked.
-const STATUS_SENDER_NAMES = ['alxxq', 'mother_one'];
-
-// 'iron_golem' -> 'Iron Golem', 'zombie' -> 'Zombie'.
-function humanizeEntityName(name) {
-  return String(name || 'Unknown').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-async function replyStatus(msg) {
-  if (!bot || !bot.entity) {
-    await msg.reply('MC bot is not connected right now, try again in a bit.').catch(() => {});
-    return;
-  }
-  // The sender's in-game entity when online and near the bot. Otherwise fall
-  // back to the bot's own surroundings, so the command always returns a
-  // result instead of only an error (the server only sends entity data for
-  // the bot's surroundings, so a far-away/offline sender has no tracked entity).
-  // The fallback is silent (no note line) per the owner's request.
-  let senderName = null;
-  let refPos = null;
-  for (const n of STATUS_SENDER_NAMES) {
-    const p = bot.players ? bot.players[n] : null;
-    if (p && p.entity) { senderName = n; refPos = p.entity.position; break; }
-  }
-  if (!refPos) refPos = bot.entity.position;
-  const pos = refPos;
-  const x = Math.floor(pos.x), y = Math.floor(pos.y), z = Math.floor(pos.z);
-  let blockName = 'Unknown';
-  try {
-    const b = bot.blockAt(pos.offset(0, -1, 0));
-    if (b) blockName = b.displayName || b.name || 'Unknown';
-  } catch (e) { /* keep Unknown */ }
-  // 3D scan: 20 blocks in all directions, including above and below.
-  const RADIUS = 20;
-  const nearbyPlayers = [];
-  const entityCounts = {};
-  for (const e of Object.values(bot.entities || {})) {
-    if (!e || !e.position) continue;
-    let d;
-    try { d = e.position.distanceTo(pos); } catch (err) { continue; }
-    if (d > RADIUS) continue;
-    if (e.type === 'player') {
-      const un = e.username;
-      if (un && un !== senderName && un !== bot.username) nearbyPlayers.push(un);
-    } else {
-      if (bot.entity && e.id === bot.entity.id) continue;
-      const key = humanizeEntityName(e.name || 'Unknown');
-      entityCounts[key] = (entityCounts[key] || 0) + 1;
-    }
-  }
-  nearbyPlayers.sort();
-  const entityPairs = Object.keys(entityCounts).sort().map((k) => [k, entityCounts[k]]);
-  // Designed image card first; the plain text status stays as the fallback.
-  try {
-    const card = await buildStatusCard({
-      position: `${x} · ${y} · ${z}`,
-      block: blockName,
-      nearbyPlayers,
-      entities: entityPairs,
-    });
-    if (card) {
-      await msg.reply({ files: [{ attachment: card, name: 'status.png' }] });
-      log(`Discord status card -> ${senderName || 'bot (fallback)'} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityPairs.length} entity types nearby.`);
-      return;
-    }
-  } catch (e) {
-    log('Status card failed, using text: ' + e.message);
-  }
-  const entityList = entityPairs.map(([k, c]) => `${k} - ${c}x`);
-  const lines = [];
-  lines.push(
-    `Position: ${x} ${y} ${z}`,
-    `Block: ${blockName}`,
-    `Nearby Players: ${nearbyPlayers.length ? nearbyPlayers.join(', ') : 'N/A'}`,
-    `Nearby Entities: ${entityList.length ? entityList.join(', ') : 'N/A'}`,
-  );
-  await msg.reply(lines.join('\n').slice(0, 1900)).catch(() => {});
-  log(`Discord status -> ${senderName || 'bot (fallback)'} at ${x} ${y} ${z}, ${nearbyPlayers.length} players, ${entityList.length} entity types nearby.`);
-}
-
-  discordClient.on('error', (e) => log('Discord ERROR: ' + (e && e.message)));
-  try {
-    await discordClient.login(config.discordToken);
-  } catch (e) {
-    log('Discord login failed: ' + e.message);
-    discordClient = null;
+    log('Discord login failed: ' + e.message)
+    discordClient = null
   }
 }
 
 process.on('uncaughtException', (err) => {
-  log('UNCAUGHT: ' + err.message);
-  scheduleReconnect();
-});
+  log('UNCAUGHT: ' + err.message)
+  scheduleReconnect()
+})
 
-// Graceful shutdown: GitHub Actions sends SIGTERM when the job hits its
-// timeout (the 5h scheduled restart) or when a newer run cancels this one.
-// Notify Discord first, then exit. Capped at 5s so a slow Discord can't hang us.
-let sigtermHandled = false;
+// Graceful shutdown. (The live build pinged the owner on Discord first;
+// owner pings are REMOVED in the merged build — just quit cleanly.)
+let sigtermHandled = false
 process.on('SIGTERM', () => {
-  if (sigtermHandled) return;
-  sigtermHandled = true;
-  log('SIGTERM received: workflow is stopping the bot. Sending leave notification...');
-  const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 5000));
-  Promise.race([pingOwnerAsync('⚠️ Madara is leaving the Minecraft server!'), timeout])
-    .catch(() => {})
-    .finally(() => {
-      try { if (bot) bot.quit('Shutting down'); } catch (e) {}
-      try { if (discordClient) discordClient.destroy(); } catch (e) {}
-      process.exit(0);
-    });
-});
+  if (sigtermHandled) return
+  sigtermHandled = true
+  log('SIGTERM received: shutting down.')
+  try { if (bot) bot.quit('Shutting down') } catch (e) {}
+  try { if (discordClient) discordClient.destroy() } catch (e) {}
+  process.exit(0)
+})
 
-startDiscord();
-startBot();
+if (require.main === module) {
+  startDiscord()
+  startBot()
+}
+
+// Test hooks (used by test-merge.js; harmless in production).
+module.exports = {
+  startBot,
+  startDiscord,
+  config,
+  getBot: () => bot,
+  getBrain: () => brain
+}
