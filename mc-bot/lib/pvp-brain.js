@@ -14,6 +14,17 @@
 //     every mode, and XP-bottle Mending repair fires on its own in any
 //     safe window — idle, target dead/far, right after a pearl-out,
 //     between fights. No command is ever required.
+//   * Fix round 2: repair triggers only when a worn Mending piece is at
+//     <=10% durability remaining (it previously fired on ANY damage, so
+//     the bot started mending the moment it was hit), and the spare swap
+//     is only the fallback when repair is impossible (no Mending / no XP
+//     bottles). Also added: AUTO-RETALIATION while idle — casual hits
+//     (fist / non-weapon) are ignored; sword/axe/spear/mace hits engage
+//     the attacker; arrow hits engage if the shooter is reachable, else
+//     the bot shield-blocks facing him; an incoming mace dive gets a
+//     pre-emptive shield raise. Attribution uses the vanilla
+//     damage_event packet (exact on 1.20.2+), with a swing-proximity
+//     fallback. See the retaliation section below.
 //   * Sword/armor lookups are tier-generic (any *_sword / *_helmet / ...)
 //     with the original diamond names preferred, so the brain works with
 //     whatever kit the bot is actually given; diamond-kit behaviour is
@@ -28,7 +39,7 @@
 // and hotbar self-organization — is the Phase 2 code, unchanged.
 
 const mineflayerPathfinder = require('mineflayer-pathfinder')
-const { pathfinder, goals } = mineflayerPathfinder
+const { pathfinder, goals, Movements } = mineflayerPathfinder
 const { Vec3 } = require('vec3')
 
 // Vanilla attack speeds -> full-charge cooldown in ms. The server counts
@@ -58,7 +69,16 @@ const WEAPON_COOLDOWN_MS = {
 }
 const DEFAULT_COOLDOWN_MS = 270 // bare hand / other items (4.0/s)
 const SWING_RANGE = 3.45 // just inside the plugin's 3.5 attackRange
-const SWAP_THRESHOLD = 30 // durability points left -> swap in a spare
+const SWAP_THRESHOLD = 30 // durability points left -> swap in a spare (fallback only, see checkArmorSwap)
+// Rafi's rule (fix round 2): automatic Mending repair starts ONLY when a
+// worn piece is down to about 10% durability REMAINING — not on any damage.
+const REPAIR_TRIGGER_REMAINING = 0.10
+// Auto-retaliation (fix round 2): a ranged attacker at/under this distance
+// (and pathfindable) is chased; beyond it the bot shield-blocks instead.
+const RETALIATE_REACH_BLOCKS = 20
+const BLOCK_FORGET_MS = 6000 // no landed hit for this long + threat gone/passive -> stand down
+const RETALIATE_LEASH_BLOCKS = 32 // retaliation target farther than this...
+const RETALIATE_LEASH_MS = 8000 // ...for this long -> give up and stand idle
 
 const rand = (min, max) => min + Math.random() * (max - min)
 const randInt = (min, max) => Math.floor(rand(min, max + 1))
@@ -117,10 +137,16 @@ function attachPvpBrain (bot, opts = {}) {
   bot.once('login', setupVelocityFix)
 
   const brain = {
-    mode: 'idle', // idle | fight | eat | pearlout | come | combo | repair | lunge-test
+    mode: 'idle', // idle | fight | eat | pearlout | come | combo | repair | lunge-test | block
     target: null,
     targetName: null,
     busy: false, // an async routine (eat / combo / repair / lunge test) owns the bot
+    // auto-retaliation (fix round 2)
+    retaliation: false, // the current fight was started by self-defense, not by a command
+    retaliationOutSince: 0, // leash timer: target out of range since when
+    block: null, // { name, entityId, since, lastHitAt, lastCheckAt, lastRaiseAt, reason } while shield-blocking
+    lastDamage: null, // last attributed damage taken { at, attackerName, weapon, projectile, sourceTypeId }
+    lastIgnoredHit: null, // last casual (fist / non-weapon) hit that was deliberately ignored
     // timing
     engageAt: 0, // do not swing before this time (reaction delay)
     lastSwingAt: 0,
@@ -161,7 +187,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0 },
     events: [],
     debugParticles: []
   }
@@ -207,11 +233,15 @@ function attachPvpBrain (bot, opts = {}) {
   }
 
   function targetHeldName () {
-    const t = brain.target
-    if (!t) return null
-    const held = t.heldItem || (t.equipment && t.equipment[0])
+    return entityHeldName(brain.target)
+  }
+
+  function entityHeldName (e) {
+    if (!e) return null
+    const held = e.heldItem || (e.equipment && e.equipment[0])
     return held ? held.name : null
   }
+  brain.entityHeldName = entityHeldName
 
   // ------------------------------------------------- item data (durability)
   // prismarine-item exposes parsed components (1.20.5+ item format); the
@@ -256,6 +286,26 @@ function attachPvpBrain (bot, opts = {}) {
       .map(d => bot.inventory.slots[bot.getEquipmentDestSlot(d)])
       .filter(Boolean)
   }
+
+  // Fraction of durability REMAINING on a piece (1 = pristine, 0 = broken).
+  function remainingFraction (item) {
+    if (!item || !item.maxDurability) return null
+    return (item.maxDurability - damageOf(item)) / item.maxDurability
+  }
+  brain.remainingFraction = remainingFraction
+
+  // Fix round 2 (Rafi's rule): repair is triggered only when a worn
+  // Mending piece is at <= REPAIR_TRIGGER_REMAINING of its durability.
+  // Before this, ANY damage (damageOf > 0) started a repair, so the bot
+  // began mending the moment it was first hit.
+  function repairTriggered () {
+    return armorPieces().some(i => {
+      if (!hasEnchant(i, 'mending')) return false
+      const f = remainingFraction(i)
+      return f !== null && f <= REPAIR_TRIGGER_REMAINING + 1e-9
+    })
+  }
+  brain.repairTriggered = repairTriggered
   brain.armorState = function () {
     return armorPieces().map(i => ({
       name: i.name,
@@ -366,6 +416,13 @@ function attachPvpBrain (bot, opts = {}) {
   // ------------------------------------------------------------- fight start
   function startFight (entity, source) {
     if (!entity || !entity.position) return false
+    // A commanded fight supersedes any shield-block stance.
+    if (brain.block) {
+      try { bot.deactivateItem() } catch (e) {}
+      brain.block = null
+    }
+    brain.retaliation = false // commanded fights are not leash-limited
+    brain.retaliationOutSince = 0
     brain.target = entity
     brain.targetName = entity.username || 'unknown'
     brain.mode = 'fight'
@@ -387,6 +444,12 @@ function attachPvpBrain (bot, opts = {}) {
   brain.startFight = startFight
 
   function stopAll (source) {
+    if (brain.block) {
+      try { bot.deactivateItem() } catch (e) {}
+      brain.block = null
+    }
+    brain.retaliation = false
+    brain.retaliationOutSince = 0
     brain.mode = 'idle'
     brain.target = null
     brain.targetName = null
@@ -731,6 +794,261 @@ function attachPvpBrain (bot, opts = {}) {
   }
   brain.spearLungeTest = spearLungeTest
 
+  // ------------------------------------------ auto-retaliation (self-defense)
+  // Fix round 2, Rafi's spec: while the bot stands idle with its kit, WHO
+  // hits it and WITH WHAT decides the response:
+  //   bare hand / non-weapon item -> NO response at all (a casual hit)
+  //   sword / axe / spear         -> attacker becomes the target; kill him
+  //   mace                        -> same (plus a pre-emptive shield raise
+  //                                  when a mace dive is spotted incoming)
+  //   bow / crossbow (arrow hit)  -> if the shooter is reachable, go kill
+  //                                  him; if not, raise a shield and block
+  //                                  facing him until the threat passes
+  // One retaliation target at a time; when it dies, leaves, or stays out
+  // of range (leash), the bot goes back to standing idle. All reactions go
+  // through the usual humanized 120-250 ms delay — nothing is instant.
+  //
+  // Attribution method (probed on the local 1.21.1 server): the vanilla
+  // `damage_event` packet names the victim (entityId), the responsible
+  // living entity (sourceCauseId — the shooter for projectiles, the
+  // attacker for melee) and the direct source (sourceDirectId — the arrow
+  // entity for projectiles, the attacker himself for melee). That is
+  // exact attribution on any 1.20.2+ server. The weapon is read from the
+  // attacker's held item at hit time (a mace hit reports damage type
+  // "player_attack" on 1.21.1, so the held item is the only weapon
+  // signal). Fallback for servers without the packet: a health drop plus
+  // a nearby player who swung within the last 700 ms inside melee reach.
+  // Limits: the fallback can misattribute when several players brawl next
+  // to the bot, and a shooter who swaps weapons within the arrow's flight
+  // time is classified by the weapon in hand when the arrow lands.
+  //
+  // WIRE QUIRK (probed + verified): sourceCauseId / sourceDirectId are
+  // optVarInts on the wire — the real entity id is (value - 1), and 0
+  // means "no entity". minecraft-data types them as plain varints, so
+  // minecraft-protocol hands us the raw shifted value; resolving
+  // bot.entities with it directly finds nothing (this exact bug made the
+  // first version of this feature silently ignore every hit). entityId,
+  // by contrast, is a plain varint and matches bot.entity.id as-is.
+  function classifyHeldItem (name) {
+    if (!name) return 'unarmed'
+    if (name === 'mace') return 'mace'
+    if (name === 'bow' || name === 'crossbow') return 'ranged'
+    if (name.endsWith('_spear')) return 'spear'
+    if (name.endsWith('_sword')) return 'sword'
+    if (name.endsWith('_axe') && !name.endsWith('pickaxe')) return 'axe'
+    return 'nonweapon'
+  }
+  brain.classifyHeldItem = classifyHeldItem
+
+  function startRetaliation (entity) {
+    endBlock('engaging the attacker')
+    if (startFight(entity, 'retaliation')) {
+      brain.retaliation = true
+      brain.retaliationOutSince = 0
+      brain.stats.retaliations++
+    }
+  }
+  brain.startRetaliation = startRetaliation
+
+  // Can the bot actually get to this attacker? Distance gate + a real
+  // pathfinder probe (planning only — the bot does not move). A partial
+  // path only counts if it ends within hitting distance of the attacker.
+  function isReachable (entity) {
+    if (!entity || !entity.position || !bot.entity) return false
+    const dist = entity.position.distanceTo(bot.entity.position)
+    if (dist > RETALIATE_REACH_BLOCKS) return false
+    try {
+      const movements = new Movements(bot)
+      const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 2)
+      const res = bot.pathfinder.getPathTo(movements, goal, 800)
+      if (res.status === 'success') return true
+      if (res.status === 'partial' && res.path && res.path.length) {
+        const end = res.path[res.path.length - 1]
+        return Math.hypot(end.x - entity.position.x, end.z - entity.position.z) <= 4.5
+      }
+      return false
+    } catch (e) {
+      return dist <= RETALIATE_REACH_BLOCKS // pathfinder unavailable: distance-only
+    }
+  }
+  brain.isReachable = isReachable
+
+  async function enterBlock (attacker, reason) {
+    if (brain.mode === 'fight' || brain.mode === 'block') return
+    const shield = bot.inventory.items().find(i => i.name === 'shield')
+    brain.mode = 'block'
+    brain.block = { name: attacker.username, entityId: attacker.id, since: Date.now(), lastHitAt: Date.now(), lastCheckAt: 0, lastRaiseAt: 0, reason }
+    if (!shield) {
+      // Spec behaviour needs a shield; without one there is nothing to
+      // block with — stay idle and say so in the log (graceful skip).
+      logEvent(`shield block wanted (${reason} threat from ${attacker.username}) but NO shield in inventory — staying idle`)
+      brain.mode = 'idle'
+      brain.block = null
+      return
+    }
+    brain.stats.shieldBlocks++
+    logEvent(`shield block: ${reason} threat from ${attacker.username} — raising shield`)
+    try {
+      await bot.lookAt(attacker.position.offset(0, 1.4, 0), true)
+      await bot.equip(shield, 'off-hand')
+      bot.activateItem(true) // raise the off-hand shield
+      brain.block.lastRaiseAt = Date.now()
+    } catch (e) {
+      logEvent('shield raise failed: ' + e.message)
+    }
+  }
+
+  function endBlock (why) {
+    if (brain.mode !== 'block' || !brain.block) return
+    try { bot.deactivateItem() } catch (e) {}
+    brain.block = null
+    brain.mode = 'idle'
+    logEvent('shield block ended: ' + why)
+    equipTotemOffhand().catch(() => {}) // back to the usual idle offhand
+  }
+  brain.endBlock = endBlock
+
+  // Periodic block upkeep, called from the decision loop while blocking.
+  function manageBlock (now) {
+    const blk = brain.block
+    if (!blk) return
+    const e = bot.entities[blk.entityId]
+    if (!e || !e.isValid || !e.position) { endBlock('threat gone'); return }
+    try { bot.lookAt(e.position.offset(0, 1.4, 0), true) } catch (err) {}
+    if (now - (blk.lastRaiseAt || 0) > 1500) { // keep the shield up
+      blk.lastRaiseAt = now
+      try { bot.activateItem(true) } catch (err) {}
+    }
+    if (blk.reason === 'mace-dive') {
+      const horiz = Math.hypot(e.position.x - bot.entity.position.x, e.position.z - bot.entity.position.z)
+      if (e.onGround && horiz <= 4.5) {
+        logEvent('retaliation: mace diver landed next to the bot — engaging')
+        startRetaliation(e)
+      } else if (now - blk.since > 2600) {
+        endBlock('mace dive passed without a hit')
+      }
+      return
+    }
+    // Ranged threat: re-check reachability every ~2 s — if he comes
+    // within reach, stop blocking and go kill him.
+    if (now - (blk.lastCheckAt || 0) > 2000) {
+      blk.lastCheckAt = now
+      if (isReachable(e)) {
+        logEvent('retaliation: ranged attacker is now reachable — engaging')
+        startRetaliation(e)
+        return
+      }
+    }
+    // Stand down only when the threat has clearly passed: no landed hit
+    // for a while AND (far beyond bow-retaliation range OR no longer
+    // holding a ranged weapon).
+    const dist = e.position.distanceTo(bot.entity.position)
+    if (now - blk.lastHitAt > BLOCK_FORGET_MS && (dist > 40 || classifyHeldItem(entityHeldName(e)) !== 'ranged')) {
+      endBlock('ranged threat has passed')
+    }
+  }
+
+  function onRangedAttack (attacker) {
+    if (brain.mode === 'block' && brain.block) {
+      brain.block.lastHitAt = Date.now()
+      brain.block.entityId = attacker.id
+      brain.block.name = attacker.username
+      return
+    }
+    if (brain.mode !== 'idle' || brain.busy) return
+    // Humanized reaction: the decision itself waits 120-250 ms.
+    setTimeout(() => {
+      if (!attacker.isValid || !attacker.position) return
+      if (brain.mode !== 'idle' || brain.busy) return
+      const dist = attacker.position.distanceTo(bot.entity.position)
+      if (isReachable(attacker)) {
+        logEvent(`retaliation: shot by ${attacker.username}, reachable at ${dist.toFixed(1)} blocks — engaging`)
+        startRetaliation(attacker)
+      } else {
+        logEvent(`retaliation: shot by ${attacker.username}, NOT reachable at ${dist.toFixed(1)} blocks — shield block`)
+        enterBlock(attacker, 'ranged').catch(() => {})
+      }
+    }, reactionDelay())
+  }
+
+  function handleAttack (attacker, weaponName, kind) {
+    if (!attacker || attacker === bot.entity || !attacker.isValid || !attacker.position) return
+    const cls = classifyHeldItem(weaponName)
+    if (brain.mode === 'block' && brain.block) {
+      brain.block.lastHitAt = Date.now()
+      // A weapon hit at close quarters ends the block: engage him.
+      if (cls === 'sword' || cls === 'axe' || cls === 'spear' || cls === 'mace') {
+        logEvent(`retaliation: ${attacker.username} closed in with a ${weaponName} — engaging`)
+        startRetaliation(attacker)
+      }
+      return
+    }
+    if (brain.mode !== 'idle' || brain.busy) return // already fighting / busy: not a new provocation
+    if (kind === 'projectile' || cls === 'ranged') {
+      onRangedAttack(attacker)
+      return
+    }
+    if (cls === 'sword' || cls === 'axe' || cls === 'spear' || cls === 'mace') {
+      logEvent(`retaliation: hit by ${attacker.username} with ${weaponName} (${kind}) — engaging`)
+      startRetaliation(attacker)
+    } else {
+      // Bare hand or a non-weapon item: a casual hit. NO response.
+      brain.stats.ignoredHits++
+      brain.lastIgnoredHit = { name: attacker.username, weapon: weaponName || null, at: Date.now() }
+      logEvent(`retaliation: casual hit from ${attacker.username} with ${weaponName || 'bare hand'} — ignored, no response`)
+    }
+  }
+  brain.handleAttack = handleAttack
+
+  // Primary attribution: the vanilla damage_event packet (1.20.2+).
+  function onDamageEvent (pkt) {
+    try {
+      if (!bot.entity || pkt.entityId !== bot.entity.id) return
+      // optVarInt decode (see the wire-quirk note above): 0 = absent.
+      const causeId = pkt.sourceCauseId > 0 ? pkt.sourceCauseId - 1 : -1
+      const directId = pkt.sourceDirectId > 0 ? pkt.sourceDirectId - 1 : -1
+      const cause = causeId >= 0 ? bot.entities[causeId] : null
+      const projectile = directId >= 0 && directId !== causeId
+      if (!cause || cause === bot.entity || cause.type !== 'player') {
+        brain.lastDamage = { at: Date.now(), attackerName: null, weapon: null, projectile, sourceTypeId: pkt.sourceTypeId }
+        return
+      }
+      const weapon = entityHeldName(cause)
+      brain.lastDamage = { at: Date.now(), attackerName: cause.username, weapon, projectile, sourceTypeId: pkt.sourceTypeId }
+      handleAttack(cause, weapon, projectile ? 'projectile' : 'melee')
+    } catch (e) {}
+  }
+  if (bot._client) bot._client.on('damage_event', onDamageEvent)
+
+  // Fallback attribution (servers without damage_event): a health drop
+  // with no packet attribution in the last 400 ms -> the player who swung
+  // most recently inside melee reach.
+  const recentSwings = new Map() // entityId -> timestamp
+  const diveSamples = new Map() // entityId -> { y, at } for fall-speed measuring
+  let lastHealthSeen = null
+  bot.on('health', () => {
+    const h = bot.health
+    if (lastHealthSeen !== null && h < lastHealthSeen) {
+      if (!brain.lastDamage || Date.now() - brain.lastDamage.at > 400) {
+        let best = null
+        let bestAt = 0
+        for (const [id, at] of recentSwings) {
+          if (Date.now() - at > 700 || at <= bestAt) continue
+          const e = bot.entities[id]
+          if (!e || e === bot.entity || e.type !== 'player' || !e.position) continue
+          if (e.position.distanceTo(bot.entity.position) > 4.5) continue
+          best = e
+          bestAt = at
+        }
+        if (best) {
+          brain.lastDamage = { at: Date.now(), attackerName: best.username, weapon: entityHeldName(best), projectile: false, sourceTypeId: null }
+          handleAttack(best, entityHeldName(best), 'melee-fallback')
+        }
+      }
+    }
+    lastHealthSeen = h
+  })
+
   // ------------------------------------------------------------ mace combo
   // pearl up-forward -> wind charge launch -> pearl toward target from the
   // air -> mace swing while falling. See the header for the grounded-pearl
@@ -965,7 +1283,9 @@ function attachPvpBrain (bot, opts = {}) {
     let thrown = 0
     logEvent('repair: throwing XP bottles to mend ' + JSON.stringify(before))
     try {
-      while (damagedMending().length && bottleCount() > 0 && thrown < 40) {
+      // Cap is only a runaway guard: a nearly-broken netherite piece
+      // needs ~50+ bottles at real orb-pickup efficiency.
+      while (damagedMending().length && bottleCount() > 0 && thrown < 128) {
         // Merged build (fully automatic repair): a repair that began in a
         // safe window during a fight aborts the moment the opponent closes
         // back in — survival first, mending second.
@@ -999,15 +1319,22 @@ function attachPvpBrain (bot, opts = {}) {
   brain.repairArmor = repairArmor
 
   // ------------------------------------------------------- spare-armor swap
+  // Fix round 2 (Rafi's rule): the swap is a FALLBACK for when repair is
+  // impossible — the piece has no Mending, or there are no XP bottles.
+  // A Mending piece with bottles at hand is left alone here: the <=10%
+  // repair trigger owns it (and 30 points is below 10% remaining on every
+  // diamond/netherite piece, so repair always fires first for those).
   let swapBusy = false
   async function checkArmorSwap () {
     if (swapBusy || brain.busy || brain.eating) return
     try {
+      const bottlesAvailable = bot.inventory.items().some(i => i.name === 'experience_bottle')
       for (const dest of ARMOR_DESTS) {
         const worn = bot.inventory.slots[bot.getEquipmentDestSlot(dest)]
         if (!worn || !worn.maxDurability) continue
         const remaining = worn.maxDurability - damageOf(worn)
         if (remaining > SWAP_THRESHOLD) continue
+        if (bottlesAvailable && hasEnchant(worn, 'mending')) continue // repair will handle it
         const spare = bot.inventory.items()
           .filter(i => i.name === worn.name)
           .sort((a, b) => damageOf(a) - damageOf(b))[0]
@@ -1063,9 +1390,13 @@ function attachPvpBrain (bot, opts = {}) {
     bot._client.on('world_particles', onParticlePacket)
   }
 
-  // Track the target's swings (hit-trading stats for the test report).
+  // Track the target's swings (hit-trading stats for the test report) and
+  // remember every player's recent swing (fallback damage attribution).
   bot.on('entitySwingArm', entity => {
     if (brain.target && entity === brain.target) brain.stats.opponentSwings++
+    if (entity && entity.type === 'player' && entity !== bot.entity) {
+      recentSwings.set(entity.id, Date.now())
+    }
   })
 
   // ------------------------------------------------------------- main loops
@@ -1099,29 +1430,75 @@ function attachPvpBrain (bot, opts = {}) {
       brain.lastSwapCheckAt = now
       if (brain.mode !== 'combo' && brain.mode !== 'lunge-test') checkArmorSwap().catch(() => {})
     }
-    // safe-moment repair: idle + damaged Mending armor + bottles at hand.
-    // This one trigger covers most of Rafi's automatic-repair spec: the
-    // bot is idle between fights, its target just died (the fight loop
-    // drops to idle), and a pearl-out ends in idle too.
+    // safe-moment repair: idle + a Mending piece down to <=10% durability
+    // remaining (fix round 2 trigger) + bottles at hand. This one trigger
+    // covers most of Rafi's automatic-repair spec: the bot is idle between
+    // fights, its target just died (the fight loop drops to idle), and a
+    // pearl-out ends in idle too.
     if (brain.mode === 'idle' && !brain.busy && now - brain.lastRepairCheckAt > 1500) {
       brain.lastRepairCheckAt = now
       const hasBottles = bot.inventory.items().some(i => i.name === 'experience_bottle')
-      if (hasBottles && armorPieces().some(i => hasEnchant(i, 'mending') && damageOf(i) > 0)) {
+      if (hasBottles && repairTriggered()) {
         repairArmor().catch(() => {})
       }
     }
     // Fully automatic repair, fight lull (merged build): the target is
     // still engaged but far away and the bot is healthy — a safe window
-    // inside the fight. repairArmor restores fight mode when done and
-    // aborts early if the opponent closes inside 6 blocks.
+    // inside the fight. Same <=10% trigger (fix round 2). repairArmor
+    // restores fight mode when done and aborts early if the opponent
+    // closes inside 6 blocks.
     if (brain.mode === 'fight' && !brain.busy && !brain.eating && now - brain.lastFightRepairCheckAt > 4000) {
       brain.lastFightRepairCheckAt = now
       if (targetDist() >= 14 && bot.health >= 18) {
         const hasBottles = bot.inventory.items().some(i => i.name === 'experience_bottle')
-        if (hasBottles && armorPieces().some(i => hasEnchant(i, 'mending') && damageOf(i) > 0)) {
+        if (hasBottles && repairTriggered()) {
           logEvent('safe window in fight (target far) — automatic Mending repair')
           repairArmor().catch(() => {})
         }
+      }
+    }
+    // ---- auto-retaliation upkeep (fix round 2) ----
+    // Shield-block management: face the threat, keep the shield up,
+    // engage if he becomes reachable, stand down when the threat passes.
+    if (brain.mode === 'block' && brain.block) {
+      manageBlock(now)
+    }
+    // Mace-dive early warning: a player falling fast toward the bot with
+    // a mace in hand gets a pre-emptive shield raise (the dive itself is
+    // then handled by manageBlock / the damage attribution on landing).
+    // Fall speed is measured from position deltas: the server sends no
+    // velocity packets for a plain gravity fall, so a remote player's
+    // entity.velocity stays ~0 while he drops.
+    if (brain.mode === 'idle' && !brain.busy && bot.entity) {
+      for (const e of Object.values(bot.entities)) {
+        if (!e || e.type !== 'player' || e === bot.entity || !e.position) continue
+        if (entityHeldName(e) !== 'mace') continue
+        const horiz = Math.hypot(e.position.x - bot.entity.position.x, e.position.z - bot.entity.position.z)
+        if (horiz > 8) { diveSamples.delete(e.id); continue }
+        const prev = diveSamples.get(e.id)
+        diveSamples.set(e.id, { y: e.position.y, at: now })
+        if (!prev || now - prev.at < 50) continue
+        const vyPerSec = (e.position.y - prev.y) / ((now - prev.at) / 1000)
+        const above = e.position.y - bot.entity.position.y
+        if (horiz <= 6.5 && above >= 1.2 && vyPerSec < -7) {
+          logEvent(`retaliation: mace dive incoming from ${e.username} (fall speed ${vyPerSec.toFixed(1)} b/s) — pre-emptive shield raise`)
+          enterBlock(e, 'mace-dive').catch(() => {})
+          break
+        }
+      }
+    }
+    // Retaliation leash: a self-defense target that stays out of range
+    // for a sustained period is given up on — back to standing idle.
+    // (Commanded fights are never leashed; startFight clears the flag.)
+    if (brain.retaliation && brain.mode === 'fight') {
+      if (targetDist() > RETALIATE_LEASH_BLOCKS) {
+        if (!brain.retaliationOutSince) brain.retaliationOutSince = now
+        else if (now - brain.retaliationOutSince > RETALIATE_LEASH_MS) {
+          logEvent('retaliation: target out of range for 8s — standing down')
+          stopAll('retaliation-leash')
+        }
+      } else {
+        brain.retaliationOutSince = 0
       }
     }
     if (brain.mode === 'fight' && !brain.eating) {
@@ -1174,6 +1551,12 @@ function attachPvpBrain (bot, opts = {}) {
   bot.on('end', () => clearInterval(decisionTimer))
 
   bot.on('death', () => {
+    if (brain.block) {
+      try { bot.deactivateItem() } catch (e) {}
+      brain.block = null
+    }
+    brain.retaliation = false
+    brain.retaliationOutSince = 0
     brain.mode = 'idle'
     brain.target = null
     clearControls()
