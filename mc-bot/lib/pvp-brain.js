@@ -25,6 +25,16 @@
 //     pre-emptive shield raise. Attribution uses the vanilla
 //     damage_event packet (exact on 1.20.2+), with a swing-proximity
 //     fallback. See the retaliation section below.
+//   * Fix round 3 (Rafi's live-test specs, 2026-11-17): normal-mode
+//     fights are SWORD ONLY (spear gap-close off); swings require a
+//     clear line of sight and a stalled chase hops up and over blocks;
+//     a target that runs 14+ blocks away gets an ender pearl thrown at
+//     him (pearl chase), and the retaliation stand-down leash no longer
+//     applies while the bot still carries pearls; a sword fight that
+//     drags 45 s+ against the same target switches to a crystal
+//     finisher — obsidian + end crystal placed fast next to the
+//     target, a protective block in front of the bot first, then the
+//     crystal is hit to detonate.
 //   * Sword/armor lookups are tier-generic (any *_sword / *_helmet / ...)
 //     with the original diamond names preferred, so the brain works with
 //     whatever kit the bot is actually given; diamond-kit behaviour is
@@ -79,6 +89,24 @@ const RETALIATE_REACH_BLOCKS = 20
 const BLOCK_FORGET_MS = 6000 // no landed hit for this long + threat gone/passive -> stand down
 const RETALIATE_LEASH_BLOCKS = 32 // retaliation target farther than this...
 const RETALIATE_LEASH_MS = 8000 // ...for this long -> give up and stand idle
+// Fix round 3 (Rafi's specs from the 2026-11-17 live test):
+//  * normal-mode fights use the SWORD only — the spear gap-close is off;
+//  * a block in front no longer stalls the fight: swings need a clear
+//    line of sight, and a bot that pushes forward without moving hops up
+//    and over the obstacle;
+//  * a target that runs far away mid-fight gets an ender pearl thrown
+//    at him, so the fight resumes on top of him;
+//  * if a sword fight drags on too long against the same target, the
+//    bot switches to a crystal finisher: obsidian + end crystal placed
+//    fast next to the target, a protective block placed in front of the
+//    bot first so the blast does not hurt the bot, then the crystal is
+//    hit to detonate. Falls back to the sword when materials run out
+//    or placement keeps failing (e.g. protected land).
+const PEARL_CHASE_MIN_BLOCKS = 14 // target farther than this, sustained...
+const PEARL_CHASE_SUSTAIN_MS = 1200 // ...for this long -> pearl to him
+const PEARL_CHASE_COOLDOWN_MS = 4000
+const CRYSTAL_AFTER_MS = 45000 // sword fight vs the same target dragging this long -> crystals
+const CRYSTAL_COOLDOWN_MS = 20000
 
 const rand = (min, max) => min + Math.random() * (max - min)
 const randInt = (min, max) => Math.floor(rand(min, max + 1))
@@ -168,6 +196,9 @@ function attachPvpBrain (bot, opts = {}) {
     // survival
     lastTotemCheckAt: 0,
     offhandWasTotem: false,
+    totemReequipAt: 0, // fix round 3b: human-delayed totem re-equip (TotemGuard)
+    turnCapYaw: 0.55, // fix round 3b: capped head-turn rate (AntiCheat Aim)
+    turnCapPitch: 0.45,
     lastEatAt: 0,
     eating: false,
     // pearl-out
@@ -177,6 +208,18 @@ function attachPvpBrain (bot, opts = {}) {
     // spear
     spearReadyAt: 0,
     spearEquipped: false,
+    // fix round 3
+    swordOnly: true, // normal-mode fights: sword only, no spear gap-close
+    fightStartedAt: 0, // when the current fight vs fightTargetId began
+    fightTargetId: null,
+    farSince: 0, // target continuously beyond pearl-chase range since
+    nextPearlChaseAt: 0,
+    nextCrystalAt: 0,
+    crystalAfterMs: 0, // test override; 0 = CRYSTAL_AFTER_MS
+    lastCrystal: null, // last crystal-finisher result { blasts, botDamage, reason }
+    stuckPos: null, // obstacle-hop tracking (pushing forward, not moving)
+    stuckSince: 0,
+    jumpUntil: 0,
     // upkeep timers
     lastSwapCheckAt: 0,
     lastRepairCheckAt: 0,
@@ -187,7 +230,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, crystalBlasts: 0 },
     events: [],
     debugParticles: []
   }
@@ -426,6 +469,9 @@ function attachPvpBrain (bot, opts = {}) {
     brain.target = entity
     brain.targetName = entity.username || 'unknown'
     brain.mode = 'fight'
+    brain.fightStartedAt = Date.now() // fix round 3: crystal-finisher clock
+    brain.fightTargetId = entity.id
+    brain.farSince = 0
     brain.engageAt = Date.now() + reactionDelay() // humanized reaction
     brain.threatSeenAt = 0
     brain.threatItem = null
@@ -453,6 +499,9 @@ function attachPvpBrain (bot, opts = {}) {
     brain.mode = 'idle'
     brain.target = null
     brain.targetName = null
+    brain.fightStartedAt = 0
+    brain.fightTargetId = null
+    brain.farSince = 0
     brain.wantCrit = false
     brain.comboId++ // cancels a running combo
     clearControls()
@@ -470,6 +519,8 @@ function attachPvpBrain (bot, opts = {}) {
       // small human-like aim error, re-rolled every 300-600 ms
       brain.aimErr = new Vec3(rand(-0.14, 0.14), rand(-0.08, 0.10), rand(-0.14, 0.14))
       brain.nextAimErrAt = now + rand(300, 600)
+      brain.turnCapYaw = rand(0.50, 0.62)
+      brain.turnCapPitch = rand(0.40, 0.50)
     }
     const chest = t.position.offset(0, 1.30, 0).plus(brain.aimErr)
     if (!brain.aimPoint) brain.aimPoint = chest.clone()
@@ -479,7 +530,26 @@ function attachPvpBrain (bot, opts = {}) {
     const maxStep = 16 * dt // blocks per second of aim travel
     if (delta.norm() > maxStep) delta.scale(maxStep / delta.norm())
     brain.aimPoint.add(delta)
-    bot.lookAt(brain.aimPoint, true)
+    // Fix round 3b (after Rafi's live test drew AntiCheat Aim Type Y/B
+    // flags and a kick): NO instant lookAt snaps in a fight. The head
+    // ROTATES toward the aim point at a capped, slightly randomized
+    // rate (~0.5 rad/tick ≈ a fast human flick) — same yaw/pitch math
+    // as mineflayer's own lookAt, stepped instead of snapped. Tracking
+    // a strafing target needs ~0.07 rad/tick, so combat tracking is
+    // unaffected; only the robotic snap is gone.
+    const eye = bot.entity.position.offset(0, bot.entity.eyeHeight || 1.62, 0)
+    const d = brain.aimPoint.minus(eye)
+    const wantYaw = Math.atan2(-d.x, -d.z)
+    const wantPitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+    let dYaw = wantYaw - bot.entity.yaw
+    while (dYaw > Math.PI) dYaw -= 2 * Math.PI
+    while (dYaw < -Math.PI) dYaw += 2 * Math.PI
+    const capY = brain.turnCapYaw || 0.55
+    const capP = brain.turnCapPitch || 0.45
+    const stepYaw = Math.max(-capY, Math.min(capY, dYaw))
+    const dPitch = wantPitch - bot.entity.pitch
+    const stepPitch = Math.max(-capP, Math.min(capP, dPitch))
+    bot.look(bot.entity.yaw + stepYaw, bot.entity.pitch + stepPitch, true)
   }
 
   // -------------------------------------------------------------- crit logic
@@ -517,10 +587,31 @@ function attachPvpBrain (bot, opts = {}) {
   }
 
   // ------------------------------------------------------------ attack logic
+  // Line of sight to the target's body (fix round 3): a swing through a
+  // wall is a wasted swing — the live test showed the bot standing at a
+  // block, swinging at the player behind it. Raycast from the bot's eyes
+  // to the target's chest; any solid block in the way blocks the swing,
+  // and the chase (with its obstacle hop) takes over instead.
+  function hasLineOfSight () {
+    const t = brain.target
+    if (!t || !t.position || !bot.entity) return false
+    try {
+      const eye = bot.entity.position.offset(0, 1.62, 0)
+      const chest = t.position.offset(0, 1.1, 0)
+      const dir = chest.minus(eye)
+      const dist = dir.norm()
+      if (dist === 0) return true
+      dir.normalize()
+      return !bot.world.raycast(eye, dir, dist)
+    } catch (e) { return true }
+  }
+  brain.hasLineOfSight = hasLineOfSight
+
   function trySwing (now, dist) {
     if (now < brain.engageAt) return
     if (now < brain.swingReadyAt) return
     if (dist > SWING_RANGE) return
+    if (!hasLineOfSight()) return
     // If a crit jump is in progress, hold the swing until we are GENUINELY
     // falling (that is what makes it a critical hit) — but never hold too
     // long, and give up on the crit if the target slipped out of range.
@@ -579,6 +670,22 @@ function attachPvpBrain (bot, opts = {}) {
     bot.setControlState('left', left)
     bot.setControlState('right', right)
     bot.setControlState('sprint', sprint)
+    // Fix round 3: obstacle hop. Pushing forward but barely moving means
+    // a block is in the way — pulse jump so the bot hops up and over it
+    // and keeps going at the player, instead of standing at the block.
+    // (The crit logic owns the jump control while a crit is winding up.)
+    if (!brain.wantCrit) {
+      const nowPos = bot.entity.position
+      if (forward && dist > 2.95) {
+        if (!brain.stuckPos) { brain.stuckPos = nowPos.clone(); brain.stuckSince = now }
+        const moved = Math.hypot(nowPos.x - brain.stuckPos.x, nowPos.z - brain.stuckPos.z)
+        if (moved > 0.6) { brain.stuckPos = nowPos.clone(); brain.stuckSince = now } else if (now - brain.stuckSince > 500) brain.jumpUntil = now + 260
+      } else {
+        brain.stuckPos = null
+        brain.stuckSince = 0
+      }
+      bot.setControlState('jump', now < brain.jumpUntil)
+    }
   }
 
   // ------------------------------------------------------------ pearl-out
@@ -632,6 +739,264 @@ function attachPvpBrain (bot, opts = {}) {
     brain.targetName = null
     clearControls()
   }
+
+  // ------------------------------------------------------------ pearl chase
+  // Fix round 3: the target ran far away mid-fight — throw an ender
+  // pearl at him and resume the fight on top of him, instead of letting
+  // him escape. Same near-flat throw ballistics as the combo's step 1.
+  async function doPearlChase () {
+    const target = brain.target
+    if (!target || !target.isValid || !target.position) return
+    const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
+    if (!pearl) {
+      logEvent('pearl chase wanted but no ender pearl in inventory')
+      brain.nextPearlChaseAt = Date.now() + PEARL_CHASE_COOLDOWN_MS
+      brain.farSince = 0
+      return
+    }
+    brain.busy = true
+    brain.mode = 'pearlchase'
+    brain.stats.pearlChases++
+    clearControls()
+    try { bot.pathfinder.setGoal(null) } catch (e) {}
+    const from = bot.entity.position.clone()
+    logEvent(`pearl chase: ${brain.targetName} is ${targetDist().toFixed(1)} blocks away — pearling to him`)
+    try {
+      await bot.equip(pearl, 'hand')
+      await bot.lookAt(target.position.offset(0, 1.2, 0), true)
+      bot.activateItem()
+      await waitTeleported(from, 3000, 1.2, target.position, 2.5)
+    } catch (e) {
+      logEvent('pearl chase failed: ' + e.message)
+    }
+    const sword = findSwordItem()
+    if (sword) await bot.equip(sword, 'hand').catch(() => {})
+    brain.nextPearlChaseAt = Date.now() + PEARL_CHASE_COOLDOWN_MS
+    brain.farSince = 0
+    brain.busy = false
+    if (brain.target && brain.target.isValid) brain.mode = 'fight'
+    else { brain.mode = 'idle'; brain.target = null; brain.targetName = null }
+  }
+
+  // ------------------------------------------------------- crystal finisher
+  // Fix round 3 (Rafi's spec): when a sword fight drags on too long
+  // against the same target, finish him with crystals — obsidian + end
+  // crystal placed FAST next to him, a protective block placed in front
+  // of the bot first so the blast does not hurt the bot, then the
+  // crystal is hit to detonate. Repeats while he lives and materials
+  // last; falls back to the sword when they run out or placement keeps
+  // failing (protected land).
+  const COVER_BLOCK_NAMES = ['cobblestone', 'netherrack', 'stone', 'deepslate', 'tuff', 'dirt', 'end_stone', 'nether_bricks', 'oak_planks', 'spruce_planks', 'stone_bricks', 'bricks', 'sandstone', 'gravel']
+  function crystalMaterials () {
+    const items = bot.inventory.items()
+    const obsidian = items.find(i => i.name === 'obsidian')
+    const crystal = items.find(i => i.name === 'end_crystal')
+    let cover = items.find(i => COVER_BLOCK_NAMES.includes(i.name))
+    if (!cover && obsidian && obsidian.count > 2) cover = obsidian // spare obsidian doubles as cover
+    return { obsidian, crystal, cover }
+  }
+  brain.crystalMaterials = crystalMaterials
+
+  // Where the obsidian base goes: the target's own feet cell first (the
+  // crystal then sits at his waist — maximum damage), else a horizontal
+  // neighbour at feet level. The cell must be air, the cell below solid,
+  // the cell above air, and the base within the bot's reach.
+  function findCrystalSpot () {
+    const t = brain.target
+    if (!t || !t.position || !bot.entity) return null
+    const feet = t.position.floored()
+    // Only the 4 horizontal neighbours: the target's OWN feet cell can
+    // never be filled while he stands in it (vanilla refuses to place a
+    // solid block inside a player's bounding box — the first round-3
+    // test failed exactly there), and a neighbour cell that his box
+    // overlaps is refused for the same reason.
+    const cells = [feet.offset(1, 0, 0), feet.offset(-1, 0, 0), feet.offset(0, 0, 1), feet.offset(0, 0, -1)]
+    const ok = []
+    for (const cell of cells) {
+      // does the target's bounding box (0.6 wide, 1.8 tall) overlap this cell?
+      const overlapX = t.position.x + 0.3 > cell.x && t.position.x - 0.3 < cell.x + 1
+      const overlapZ = t.position.z + 0.3 > cell.z && t.position.z - 0.3 < cell.z + 1
+      if (overlapX && overlapZ) continue
+      const below = bot.blockAt(cell.offset(0, -1, 0))
+      const at = bot.blockAt(cell)
+      const above = bot.blockAt(cell.offset(0, 1, 0))
+      if (!below || below.boundingBox !== 'block') continue
+      if (!at || at.boundingBox !== 'empty') continue
+      if (!above || above.boundingBox !== 'empty') continue
+      if (bot.entity.position.distanceTo(cell.offset(0.5, 0.5, 0.5)) > 4.6) continue
+      ok.push(cell)
+    }
+    if (!ok.length) return null
+    // closest to the BOT first: fastest to place, and the bot is already
+    // standing on that side of the target
+    ok.sort((a, b) => bot.entity.position.distanceTo(a) - bot.entity.position.distanceTo(b))
+    return ok[0]
+  }
+
+  async function doCrystalFinisher () {
+    const target = brain.target
+    if (!target || !target.isValid || !target.position) return
+    brain.busy = true
+    brain.mode = 'crystal'
+    clearControls()
+    try { bot.pathfinder.setGoal(null) } catch (e) {}
+    const startedAt = Date.now()
+    const healthBefore = bot.health
+    const result = { blasts: 0, botDamage: 0, reason: null, cycles: 0 }
+    brain.lastCrystal = result
+    logEvent(`crystal finisher: sword fight vs ${brain.targetName} dragging past ${Math.round((Date.now() - brain.fightStartedAt) / 1000)}s — switching to crystals`)
+    let consecutiveFails = 0
+    try {
+      while (brain.mode === 'crystal' && brain.target === target && target.isValid && target.position) {
+        if (Date.now() - startedAt > 45000) { result.reason = 'finisher time cap (45s)'; break }
+        const mats = crystalMaterials()
+        if (!mats.obsidian || !mats.crystal) { result.reason = 'out of obsidian or crystals'; break }
+        if (!mats.cover) { result.reason = 'no cover block available — will not blast unprotected'; break }
+        result.cycles++
+        // 1) get within placing + hitting distance of the target
+        const distT = targetDist()
+        if (distT > 2.9) {
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 2.0))
+            const deadline = Date.now() + 3500
+            while (Date.now() < deadline && brain.mode === 'crystal' && target.isValid && targetDist() > 2.9) await sleep(90)
+            bot.pathfinder.setGoal(null)
+          } catch (e) {}
+        }
+        if (brain.mode !== 'crystal' || !target.isValid) break
+        // 2) an already-placed crystal near the target (e.g. the last
+        // cycle's detonation swing missed) is reused before placing more
+        let crystalEntity = Object.values(bot.entities).find(e =>
+          e && e.position && e.position.distanceTo(target.position) < 3.2 &&
+          ((e.name || '').includes('crystal') || (e.displayName || '').includes('Crystal')))
+        let spot = null
+        if (!crystalEntity) {
+          // 3) find the base spot next to (or under) the target — and
+          // re-verify it is still in reach at the moment of placing (a
+          // target sliding from knockback made a stale spot fail with
+          // "the block is still air" in the first round-3 test).
+          spot = findCrystalSpot()
+          if (!spot || bot.entity.position.distanceTo(spot.offset(0.5, 0.5, 0.5)) > 4.4) {
+            consecutiveFails++
+            logEvent('crystal finisher: no valid base spot near the target')
+            if (consecutiveFails >= 2) { result.reason = 'no placeable spot (protected land?)'; break }
+            await sleep(300)
+            continue
+          }
+          const below = bot.blockAt(spot.offset(0, -1, 0))
+          // 4) obsidian base — a refused placement fails THIS cycle,
+          // not the whole finisher
+          try {
+            await bot.equip(mats.obsidian, 'hand')
+            await bot.placeBlock(below, new Vec3(0, 1, 0))
+            await sleep(110)
+            const placed = bot.blockAt(spot)
+            if (!placed || placed.name !== 'obsidian') throw new Error('obsidian did not register')
+          } catch (e) {
+            consecutiveFails++
+            logEvent('crystal finisher: obsidian placement failed (' + e.message + ')')
+            if (consecutiveFails >= 3) { result.reason = 'obsidian placement keeps failing'; break }
+            await sleep(250)
+            continue
+          }
+          // 5) end crystal on top of the base
+          const baseBlock = bot.blockAt(spot)
+          const matsNow = crystalMaterials()
+          if (!matsNow.crystal) { result.reason = 'out of crystals mid-cycle'; break }
+          try {
+            await bot.equip(matsNow.crystal, 'hand')
+            await bot.placeBlock(baseBlock, new Vec3(0, 1, 0))
+          } catch (e) {
+            consecutiveFails++
+            logEvent('crystal finisher: crystal placement failed (' + e.message + ')')
+            if (consecutiveFails >= 3) { result.reason = 'crystal placement keeps failing'; break }
+            await sleep(250)
+            continue
+          }
+          await sleep(120)
+          // 6) the crystal entity should now exist just above the base
+          crystalEntity = Object.values(bot.entities).find(e =>
+            e && e.position && e.position.distanceTo(spot.offset(0.5, 1, 0.5)) < 2.2 &&
+            ((e.name || '').includes('crystal') || (e.displayName || '').includes('Crystal')))
+          if (!crystalEntity) {
+            consecutiveFails++
+            logEvent('crystal finisher: crystal entity did not appear after placement')
+            if (consecutiveFails >= 2) { result.reason = 'crystal placement not spawning'; break }
+            continue
+          }
+        }
+        consecutiveFails = 0
+        const baseCell = spot || crystalEntity.position.offset(-0.5, -1, -0.5).floored()
+        // 6) protective cover in front of the bot, between bot and
+        // crystal. PROBE-VERIFIED geometry (local A/B, crystal on a
+        // 1-block base, bot 2.5 blocks away, full netherite): a block
+        // at FEET level alone gives NO protection (5.72 damage, same as
+        // uncovered — the crystal sits high and the blast rays pass
+        // over it), while a block at WAIST level cuts it to 0.21. So
+        // the cover is two blocks: feet block as the support, waist
+        // block as the actual shield.
+        const coverMats = crystalMaterials()
+        if (coverMats.cover) {
+          const bp = bot.entity.position
+          const dir = crystalEntity.position.minus(bp)
+          dir.y = 0
+          if (dir.norm() > 0.01) {
+            dir.normalize()
+            const front = new Vec3(Math.floor(bp.x + dir.x * 1.15), Math.floor(bp.y), Math.floor(bp.z + dir.z * 1.15))
+            if (front.distanceTo(baseCell) > 0.9) {
+              await bot.equip(coverMats.cover, 'hand').catch(() => {})
+              const frontAt = bot.blockAt(front)
+              const frontBelow = bot.blockAt(front.offset(0, -1, 0))
+              if (frontAt && frontAt.boundingBox === 'empty' && frontBelow && frontBelow.boundingBox === 'block') {
+                await bot.placeBlock(frontBelow, new Vec3(0, 1, 0)).catch(() => {})
+              }
+              const waist = front.offset(0, 1, 0)
+              const waistAt = bot.blockAt(waist)
+              const support = bot.blockAt(front)
+              if (waistAt && waistAt.boundingBox === 'empty' && support && support.boundingBox === 'block') {
+                const coverNow = crystalMaterials().cover
+                if (coverNow) {
+                  await bot.equip(coverNow, 'hand').catch(() => {})
+                  await bot.placeBlock(support, new Vec3(0, 1, 0)).catch(() => {})
+                }
+              }
+            }
+          }
+        }
+        // 7) sword back in hand, look at the crystal, hit it — blast
+        const sword = findSwordItem()
+        if (sword) await bot.equip(sword, 'hand').catch(() => {})
+        await bot.lookAt(crystalEntity.position.offset(0, 0.4, 0), true)
+        bot.attack(crystalEntity)
+        brain.stats.crystalBlasts++
+        result.blasts++
+        logEvent(`crystal finisher: blast #${result.blasts} on ${brain.targetName}`)
+        await sleep(rand(280, 420))
+        // loop: if he survived and materials remain, place the next one — fast
+      }
+    } catch (e) {
+      result.reason = e.message
+      logEvent('crystal finisher stopped: ' + e.message)
+    }
+    result.botDamage = Math.max(0, Math.round((healthBefore - bot.health) * 10) / 10)
+    if (!result.reason) result.reason = (target.isValid && brain.target === target) ? 'target still standing — back to sword' : 'target gone'
+    logEvent(`crystal finisher done: ${JSON.stringify(result)}`)
+    const sword = findSwordItem()
+    if (sword) await bot.equip(sword, 'hand').catch(() => {})
+    brain.nextCrystalAt = Date.now() + CRYSTAL_COOLDOWN_MS
+    brain.busy = false
+    if (brain.target === target && target.isValid && brain.mode === 'crystal') {
+      brain.mode = 'fight'
+      brain.fightStartedAt = Date.now() // the sword clock restarts after a crystal round
+      brain.aimPoint = null
+    } else if (brain.mode === 'crystal') {
+      brain.mode = 'idle'
+      brain.target = null
+      brain.targetName = null
+    }
+    clearControls()
+  }
+  brain.doCrystalFinisher = doCrystalFinisher
 
   // ------------------------------------------------------------ eating
   async function doEat () {
@@ -1490,8 +1855,13 @@ function attachPvpBrain (bot, opts = {}) {
     // Retaliation leash: a self-defense target that stays out of range
     // for a sustained period is given up on — back to standing idle.
     // (Commanded fights are never leashed; startFight clears the flag.)
+    // Fix round 3: while the bot still carries ender pearls there is no
+    // stand-down — the pearl chase closes the gap instead (Rafi: a
+    // retaliation fight ends when the attacker is dead, not when he
+    // runs). The leash remains for the no-pearl case only.
     if (brain.retaliation && brain.mode === 'fight') {
-      if (targetDist() > RETALIATE_LEASH_BLOCKS) {
+      const hasPearl = bot.inventory.items().some(i => i.name === 'ender_pearl')
+      if (!hasPearl && targetDist() > RETALIATE_LEASH_BLOCKS) {
         if (!brain.retaliationOutSince) brain.retaliationOutSince = now
         else if (now - brain.retaliationOutSince > RETALIATE_LEASH_MS) {
           logEvent('retaliation: target out of range for 8s — standing down')
@@ -1512,7 +1882,18 @@ function attachPvpBrain (bot, opts = {}) {
           logEvent('totem popped — re-equipping')
         }
         brain.offhandWasTotem = !!hasTotem
-        if (!hasTotem) equipTotemOffhand().catch(() => {})
+        if (hasTotem) {
+          brain.totemReequipAt = 0
+        } else if (!brain.totemReequipAt) {
+          // Fix round 3b: TotemGuard flagged the bot's INSTANT totem
+          // re-equip (AutoTotemA, VL 3/4 in Rafi's live test). A human
+          // needs a moment to swap a fresh totem in — wait a randomized
+          // 500-1100 ms before re-equipping.
+          brain.totemReequipAt = now + rand(500, 1100)
+        } else if (now >= brain.totemReequipAt) {
+          brain.totemReequipAt = 0
+          equipTotemOffhand().catch(() => {})
+        }
       }
       // pearl-out threat scan
       const held = targetHeldName()
@@ -1528,9 +1909,34 @@ function attachPvpBrain (bot, opts = {}) {
         brain.threatSeenAt = 0
         brain.threatItem = null
       }
-      // spear gap-close: target parked in the 3.5-4.6 band (inert on 1.21.1)
+      // fix round 3: pearl chase — the target ran far away and stays
+      // away; pearl to him and resume. Skipped at low health (a pearl
+      // costs health on landing) and while another action owns the bot.
+      if (!brain.busy && !brain.eating && bot.health > 6) {
+        const dFar = targetDist()
+        if (dFar > PEARL_CHASE_MIN_BLOCKS) {
+          if (!brain.farSince) brain.farSince = now
+          else if (now - brain.farSince > PEARL_CHASE_SUSTAIN_MS && now >= brain.nextPearlChaseAt) {
+            doPearlChase().catch(() => {})
+          }
+        } else brain.farSince = 0
+      }
+      // fix round 3: crystal finisher — the sword fight against this
+      // same target has dragged on too long; switch to crystals (the
+      // finisher itself falls back to the sword when materials end).
+      if (!brain.busy && !brain.eating && brain.fightStartedAt &&
+        brain.target && brain.target.id === brain.fightTargetId &&
+        now - brain.fightStartedAt >= (brain.crystalAfterMs || CRYSTAL_AFTER_MS) &&
+        now >= brain.nextCrystalAt) {
+        const mats = crystalMaterials()
+        if (mats.obsidian && mats.crystal && mats.cover) doCrystalFinisher().catch(() => {})
+        else brain.nextCrystalAt = now + CRYSTAL_COOLDOWN_MS
+      }
+      // spear gap-close: target parked in the 3.5-4.6 band (inert on 1.21.1).
+      // Fix round 3: OFF in normal mode — Rafi's rule is sword only; the
+      // lunge test hook below stays available for the test harness.
       const dist = targetDist()
-      if (!brain.busy && dist > SWING_RANGE && dist <= 4.6 && now >= brain.spearReadyAt && findSpear()) {
+      if (!brain.swordOnly && !brain.busy && dist > SWING_RANGE && dist <= 4.6 && now >= brain.spearReadyAt && findSpear()) {
         spearGapClose().catch(() => {})
       }
       if (brain.spearEquipped && dist <= SWING_RANGE) {
