@@ -1,1 +1,15 @@
-{"dependencies":{"discord.js":"^14.16.3","mineflayer":"^4.25.0","sharp":"^0.35.5"},"description":"24/7 Minecraft bot (Mineflayer) run via GitHub Actions","main":"bot.js","name":"mc-bot","private":true,"scripts":{"start":"node bot.js"},"version":"1.0.0"}
+{
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "mineflayer": "^4.39.0",
+    "mineflayer-pathfinder": "^2.4.5"
+  },
+  "description": "Madara_1ea: lifecycle (AuthMe, Render health, Discord panel) + Phase 2 PvP brain",
+  "main": "bot.js",
+  "name": "mc-bot",
+  "private": true,
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "version": "1.0.0"
+}
