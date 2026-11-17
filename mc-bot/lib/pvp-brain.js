@@ -230,7 +230,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, crystalBlasts: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, crystalBlasts: 0 },
     events: [],
     debugParticles: []
   }
@@ -1011,7 +1011,40 @@ function attachPvpBrain (bot, opts = {}) {
     const targetAtStart = brain.target
     logEvent(`health ${bot.health.toFixed(1)} <= 10 — creating distance, then eating a golden apple`)
     let aborted = false
+    let pearledAway = false
     try {
+      // Fix round 3c — Rafi's heal rule (2026-11-17): the FIRST choice
+      // is an ender pearl AWAY from the target. The foot-flee below
+      // almost never opened the 4.2-block eating gap against an
+      // opponent glued to the bot, so in Rafi's live test the bot ate
+      // nothing and lived on totem regen alone. If a pearl fails to
+      // teleport the bot (hit a wall / never landed), turn ~120
+      // degrees and throw again — up to 3 tries — then fall back to
+      // the foot-flee. (After a successful pearl the flee loop sees
+      // the gap is already open and exits at once.)
+      if (bot.inventory.items().some(i => i.name === 'ender_pearl') && targetAtStart && targetAtStart.position) {
+        const away0 = bot.entity.position.minus(targetAtStart.position)
+        away0.y = 0
+        if (away0.norm() > 0.01) {
+          away0.normalize()
+          for (let attempt = 0; attempt < 3 && !pearledAway; attempt++) {
+            const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
+            if (!pearl) break
+            const ang = attempt * 2.1 + rand(-0.25, 0.25)
+            const dir = new Vec3(
+              away0.x * Math.cos(ang) - away0.z * Math.sin(ang), 0,
+              away0.x * Math.sin(ang) + away0.z * Math.cos(ang))
+            brain.stats.healPearls++
+            logEvent(`heal: pearling away from the target (attempt ${attempt + 1})`)
+            await bot.equip(pearl, 'hand').catch(() => {})
+            const before = bot.entity.position.clone()
+            await bot.lookAt(bot.entity.position.plus(dir.scaled(14)).offset(0, 2.4, 0), true)
+            bot.activateItem()
+            pearledAway = await waitTeleported(before, 1300)
+            if (!pearledAway) logEvent('heal pearl did not land — turning to a new direction')
+          }
+        }
+      }
       // Phase 1: sprint directly away WITH strafing until a gap opens,
       // max ~1.4 s. A sprinting pursuer (the plugin bot pathfinds at full
       // sprint) nearly matches our speed, so the flee almost never opens
@@ -1061,6 +1094,15 @@ function attachPvpBrain (bot, opts = {}) {
           brain.stats.gapplesEaten++
           brain.lastEatAt = Date.now()
           logEvent('golden apple eaten')
+          // Fix round 3c: stay out a few seconds so the regen +
+          // absorption actually restore health before re-engaging
+          // (Rafi: heal up first, THEN go back and fight). The fight
+          // loop + pearl chase close the distance again afterwards.
+          const recDeadline = Date.now() + 2600
+          while (Date.now() < recDeadline && bot.health < 16) {
+            if (targetAtStart && targetAtStart.position && targetDist() < 3.5) break
+            await sleep(200)
+          }
         }
       } else if (apple) {
         logEvent(`eat skipped — gap too small (distance ${gapNow === Infinity ? 'n/a' : gapNow.toFixed(1)}), will retry after the cooldown`)
