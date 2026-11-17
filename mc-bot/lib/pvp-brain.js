@@ -35,6 +35,18 @@
 //     finisher — obsidian + end crystal placed fast next to the
 //     target, a protective block in front of the bot first, then the
 //     crystal is hit to detonate.
+//   * Fix round 4 (Rafi's specs, 2026-11-17 evening): (1) an
+//     ESCALATION LADDER for non-weapon attackers — hits 1-2 ignored,
+//     hit 3 gets ONE bare-hand punch back, hit 4 makes the bot draw
+//     its sword and just stand (warning pose), hit 5 engages fully.
+//     Weapon attacks keep the round-2 rules unchanged. (2) A
+//     multi-attacker SPECIAL MODE: with 2+ distinct recent opponents
+//     the bot pearls away briefly, comes back and spams obsidian +
+//     end crystal SUPER FAST (no humanized delays in this mode),
+//     detonating each crystal with a BARE HAND; if its totems are
+//     nearly out while outnumbered, it falls back to the aerial
+//     pearl + wind-charge + mace combo. The /shop auto-buy idea is
+//     postponed by Rafi and NOT part of this round.
 //   * Sword/armor lookups are tier-generic (any *_sword / *_helmet / ...)
 //     with the original diamond names preferred, so the brain works with
 //     whatever kit the bot is actually given; diamond-kit behaviour is
@@ -107,6 +119,49 @@ const PEARL_CHASE_SUSTAIN_MS = 1200 // ...for this long -> pearl to him
 const PEARL_CHASE_COOLDOWN_MS = 4000
 const CRYSTAL_AFTER_MS = 45000 // sword fight vs the same target dragging this long -> crystals
 const CRYSTAL_COOLDOWN_MS = 20000
+// Fix round 4 (Rafi's specs, 2026-11-17 evening):
+//  * ESCALATION LADDER for non-weapon attackers (bare hand, a totem or
+//    any non-weapon item/block in hand): per-attacker hit counter —
+//    hits 1-2 ignored, hit 3 = ONE bare-hand punch back (no fight),
+//    hit 4 = sword drawn, standing pose only, hit 5 = full engage.
+//    The counter resets after this long without a hit from that player.
+const LADDER_RESET_MS = 30000
+//  * SPECIAL MODE: distinct players who hit the bot (or were commanded
+//    as targets) count as opponents while they stay "recent" — this is
+//    the window their last hit must fall inside.
+const ATTACKER_WINDOW_MS = 20000
+const SPECIAL_COOLDOWN_MS = 8000 // gap between special-mode actions
+//  * REVISED multi-attacker flow (Rafi, 2026-11-17 22:20, supersedes
+//    the totem-low-first flow): 2+ opponents -> AT MOST 2 fast crystal
+//    blasts, then the aerial MACE COMBO, and the bot STAYS on the mace
+//    combo while outnumbered (a 3rd attacker changes nothing). The
+//    totem-low trigger is secondary now — it only matters when there
+//    are no crystals left to open with.
+const CRYSTAL_SPAM_MAX = 2 // crystals per spam run (Rafi: at most 2)
+const CRYSTAL_SPAM_CAP_MS = 20000 // hard cap for one spam run
+const MULTI_COMBO_COOLDOWN_MS = 4000 // gap between repeated mace combos while outnumbered
+//  * PERSISTENT FINISHER CLOCK (Rafi, 2026-11-17 22:20): the 45 s
+//    crystal-finisher threshold is accumulated FIGHT time against one
+//    target — it only grows while the bot is actually in 'fight' mode
+//    against that target, PAUSES through heals / escapes / pearl-outs,
+//    survives a stand-down + re-engage inside this grace window, and
+//    resets only when the target changes, dies, or the fight is over
+//    for good (commanded stop / grace expired).
+const FIGHT_CLOCK_GRACE_MS = 20000
+//  * MACE FALLBACK (kept for reporting/back-compat): totems nearly out
+//    = no spare totem beyond the offhand one.
+const MACE_FALLBACK_MIN_SPECIAL_MS = 5000
+const MACE_FALLBACK_COOLDOWN_MS = 45000
+//  * WATER ESCAPE (Rafi's live bug, seen twice): head under water for
+//    this long mid-fight -> swim up, get to shore, resume the chase.
+const DEEP_WATER_CONFIRM_MS = 400
+const WATER_ESCAPE_COOLDOWN_MS = 6000
+//  * CLIMB (Rafi, 2026-11-17): target this far above the bot with the
+//    bot this close horizontally -> climb (ladder / vine / scaffolding)
+//    instead of standing underneath.
+const CLIMB_MIN_DY = 2.0
+const CLIMB_MAX_HORIZ = 9
+const CLIMB_COOLDOWN_MS = 8000
 
 const rand = (min, max) => min + Math.random() * (max - min)
 const randInt = (min, max) => Math.floor(rand(min, max + 1))
@@ -221,6 +276,32 @@ function attachPvpBrain (bot, opts = {}) {
     nextWebEscapeAt: 0,
     fireSince: 0,
     nextWaterAt: 0,
+    // fix round 4 (escalation ladder + multi-attacker special mode)
+    ladder: new Map(), // entityId -> { count, lastHitAt, name } non-weapon provocation counts
+    ladderBusy: false, // a ladder punch / sword-pose routine owns the hands
+    ladderPose: null, // { name, at } while the sword-warning pose is up
+    opponents: new Map(), // entityId -> { name, lastHitAt, entity } this fight's opponents
+    specialSince: 0, // 2+ opponents continuously since (0 = not in special territory)
+    nextSpecialAt: 0,
+    nextMaceFallbackAt: 0,
+    maceFallbackMinMs: 0, // test override; 0 = MACE_FALLBACK_MIN_SPECIAL_MS
+    // fix round 4 revision (2026-11-17 22:20): persistent finisher
+    // clock + revised multi-attacker flow + water escape + climb
+    fightClockTargetId: null, // entity id the accumulated fight clock belongs to
+    fightTimeMs: 0, // accumulated FIGHT-mode ms vs fightClockTargetId (pauses, never wall-clock)
+    fightClockExpiresAt: 0, // after a stand-down, the clock is wiped at this time
+    lastClockTickAt: 0,
+    prevDecisionMode: 'idle',
+    multiCrystalDone: false, // this outnumbered episode already had its <=2 crystal blasts
+    multiSeenAt: 0, // last time 2+ opponents were counted
+    nextComboAt: 0,
+    lastCombo: null, // last multi-mode mace combo { at, targetName }
+    maceLockTargetId: null, // fix round 4 (22:29): a player the mace has HIT stays the combo target until he dies
+    deepWaterSince: 0,
+    nextWaterEscapeAt: 0,
+    nextClimbAt: 0,
+    lastCrystalSpam: null, // last spam result { blasts, firstBlastAt, bareHand, reason }
+    lastMaceFallback: null, // { at, targetName, totemSpares }
     lastCrystal: null, // last crystal-finisher result { blasts, botDamage, reason }
     stuckPos: null, // obstacle-hop tracking (pushing forward, not moving)
     stuckSince: 0,
@@ -235,7 +316,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, webEscapes: 0, waterUses: 0, crystalBlasts: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, webEscapes: 0, waterUses: 0, crystalBlasts: 0, ladderPunches: 0, ladderPoses: 0, crystalSpamBlasts: 0, specialModes: 0, maceFallbacks: 0, waterEscapes: 0, climbs: 0, maceCombos: 0 },
     events: [],
     debugParticles: []
   }
@@ -474,7 +555,17 @@ function attachPvpBrain (bot, opts = {}) {
     brain.target = entity
     brain.targetName = entity.username || 'unknown'
     brain.mode = 'fight'
-    brain.fightStartedAt = Date.now() // fix round 3: crystal-finisher clock
+    registerOpponent(entity) // fix round 4: a fight target counts as an opponent
+    // Fix round 4 revision: the crystal-finisher clock is PERSISTENT
+    // per target. Re-engaging the SAME player (after a heal, a pearl-
+    // out, a target-gone stand-down...) keeps the accumulated fight
+    // time; only a DIFFERENT target starts a fresh clock.
+    if (brain.fightClockTargetId !== entity.id) {
+      brain.fightClockTargetId = entity.id
+      brain.fightTimeMs = 0
+      brain.fightStartedAt = Date.now()
+    }
+    brain.fightClockExpiresAt = 0
     brain.fightTargetId = entity.id
     brain.farSince = 0
     brain.engageAt = Date.now() + reactionDelay() // humanized reaction
@@ -506,7 +597,16 @@ function attachPvpBrain (bot, opts = {}) {
     brain.targetName = null
     brain.fightStartedAt = 0
     brain.fightTargetId = null
+    // a commanded stop ends the fight for good: the persistent
+    // finisher clock is wiped too (fix round 4 revision)
+    brain.fightClockTargetId = null
+    brain.fightTimeMs = 0
+    brain.fightClockExpiresAt = 0
+    brain.multiCrystalDone = false
+    brain.maceLockTargetId = null
     brain.farSince = 0
+    brain.opponents.clear() // fix round 4: the fight is over, so is its opponent set
+    brain.specialSince = 0
     brain.wantCrit = false
     brain.comboId++ // cancels a running combo
     clearControls()
@@ -556,6 +656,49 @@ function attachPvpBrain (bot, opts = {}) {
     const stepPitch = Math.max(-capP, Math.min(capP, dPitch))
     bot.look(bot.entity.yaw + stepYaw, bot.entity.pitch + stepPitch, true)
   }
+
+  // Fix round 4 revision (Rafi, 2026-11-17 22:20): the MACE COMBO must
+  // aim with the same humanized turn-rate caps as normal fighting —
+  // Rafi is explicit that the combo must not trip AntiCheat Aim flags.
+  // stepAim rotates the head ONE capped step toward a point (same caps
+  // as updateAim); aimAtSmooth repeats it on a ~50 ms tick until the
+  // head is on the point or the budget runs out. Every lookAt(...,true)
+  // snap in the combo path was replaced by one of these.
+  function stepAim (point) {
+    if (!point || !bot.entity) return
+    const eye = bot.entity.position.offset(0, bot.entity.eyeHeight || 1.62, 0)
+    const d = point.minus(eye)
+    const wantYaw = Math.atan2(-d.x, -d.z)
+    const wantPitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+    let dYaw = wantYaw - bot.entity.yaw
+    while (dYaw > Math.PI) dYaw -= 2 * Math.PI
+    while (dYaw < -Math.PI) dYaw += 2 * Math.PI
+    const capY = brain.turnCapYaw || 0.55
+    const capP = brain.turnCapPitch || 0.45
+    const stepYaw = Math.max(-capY, Math.min(capY, dYaw))
+    const dPitch = wantPitch - bot.entity.pitch
+    const stepPitch = Math.max(-capP, Math.min(capP, dPitch))
+    bot.look(bot.entity.yaw + stepYaw, bot.entity.pitch + stepPitch, true)
+  }
+  brain.stepAim = stepAim
+
+  async function aimAtSmooth (point, budgetMs) {
+    const deadline = Date.now() + (budgetMs || 500)
+    while (Date.now() < deadline) {
+      stepAim(point)
+      // aligned? compare wanted vs current angles
+      const eye = bot.entity.position.offset(0, bot.entity.eyeHeight || 1.62, 0)
+      const d = point.minus(eye)
+      const wantYaw = Math.atan2(-d.x, -d.z)
+      let dYaw = wantYaw - bot.entity.yaw
+      while (dYaw > Math.PI) dYaw -= 2 * Math.PI
+      while (dYaw < -Math.PI) dYaw += 2 * Math.PI
+      const wantPitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+      if (Math.abs(dYaw) < 0.06 && Math.abs(wantPitch - bot.entity.pitch) < 0.06) break
+      await sleep(50)
+    }
+  }
+  brain.aimAtSmooth = aimAtSmooth
 
   // -------------------------------------------------------------- crit logic
   function targetCornered () {
@@ -792,14 +935,22 @@ function attachPvpBrain (bot, opts = {}) {
   // last; falls back to the sword when they run out or placement keeps
   // failing (protected land).
   const COVER_BLOCK_NAMES = ['cobblestone', 'netherrack', 'stone', 'deepslate', 'tuff', 'dirt', 'end_stone', 'nether_bricks', 'oak_planks', 'spruce_planks', 'stone_bricks', 'bricks', 'sandstone', 'gravel']
+  // CRYSTALS ONLY (Rafi, 2026-11-17): Madara's inventory also holds
+  // respawn anchors, but the bot must NEVER place or use one itself —
+  // an anchor blast digs a huge crater. All crystal-role lookups go
+  // through this filter, so an anchor can never be picked as a base,
+  // a crystal, or a cover block. (An OPPONENT holding an anchor is a
+  // different thing — that stays a pearl-out threat, as before.)
+  const FORBIDDEN_SELF_USE = new Set(['respawn_anchor'])
   function crystalMaterials () {
-    const items = bot.inventory.items()
+    const items = bot.inventory.items().filter(i => !FORBIDDEN_SELF_USE.has(i.name))
     const obsidian = items.find(i => i.name === 'obsidian')
     const crystal = items.find(i => i.name === 'end_crystal')
     let cover = items.find(i => COVER_BLOCK_NAMES.includes(i.name))
     if (!cover && obsidian && obsidian.count > 2) cover = obsidian // spare obsidian doubles as cover
     return { obsidian, crystal, cover }
   }
+  brain.forbiddenSelfUse = FORBIDDEN_SELF_USE
   brain.crystalMaterials = crystalMaterials
 
   // Where the obsidian base goes: the target's own feet cell first (the
@@ -849,7 +1000,7 @@ function attachPvpBrain (bot, opts = {}) {
     const healthBefore = bot.health
     const result = { blasts: 0, botDamage: 0, reason: null, cycles: 0 }
     brain.lastCrystal = result
-    logEvent(`crystal finisher: sword fight vs ${brain.targetName} dragging past ${Math.round((Date.now() - brain.fightStartedAt) / 1000)}s — switching to crystals`)
+    logEvent(`crystal finisher: accumulated sword fight vs ${brain.targetName} reached ${Math.round(brain.fightTimeMs / 1000)}s — switching to crystals`)
     let consecutiveFails = 0
     try {
       while (brain.mode === 'crystal' && brain.target === target && target.isValid && target.position) {
@@ -894,7 +1045,7 @@ function attachPvpBrain (bot, opts = {}) {
           try {
             await bot.equip(mats.obsidian, 'hand')
             await bot.placeBlock(below, new Vec3(0, 1, 0))
-            await sleep(110)
+            await sleep(60) // fix round 4 revision: faster crystal cycle (Rafi)
             const placed = bot.blockAt(spot)
             if (!placed || placed.name !== 'obsidian') throw new Error('obsidian did not register')
           } catch (e) {
@@ -918,7 +1069,7 @@ function attachPvpBrain (bot, opts = {}) {
             await sleep(250)
             continue
           }
-          await sleep(120)
+          await sleep(60) // fix round 4 revision: faster crystal cycle (Rafi)
           // 6) the crystal entity should now exist just above the base
           crystalEntity = Object.values(bot.entities).find(e =>
             e && e.position && e.position.distanceTo(spot.offset(0.5, 1, 0.5)) < 2.2 &&
@@ -976,7 +1127,7 @@ function attachPvpBrain (bot, opts = {}) {
         brain.stats.crystalBlasts++
         result.blasts++
         logEvent(`crystal finisher: blast #${result.blasts} on ${brain.targetName}`)
-        await sleep(rand(280, 420))
+        await sleep(rand(120, 200)) // fix round 4 revision: faster pace between blasts (Rafi)
         // loop: if he survived and materials remain, place the next one — fast
       }
     } catch (e) {
@@ -992,7 +1143,8 @@ function attachPvpBrain (bot, opts = {}) {
     brain.busy = false
     if (brain.target === target && target.isValid && brain.mode === 'crystal') {
       brain.mode = 'fight'
-      brain.fightStartedAt = Date.now() // the sword clock restarts after a crystal round
+      brain.fightTimeMs = 0 // the persistent clock re-arms after a crystal round
+      brain.fightStartedAt = Date.now()
       brain.aimPoint = null
     } else if (brain.mode === 'crystal') {
       brain.mode = 'idle'
@@ -1130,6 +1282,194 @@ function attachPvpBrain (bot, opts = {}) {
       brain.target = null
     }
   }
+
+  // --------------------------------- fix round 4: water escape + climb
+  // WATER ESCAPE (Rafi's live bug, seen TWICE): Madara pearled into
+  // water mid-fight and stood UNDERWATER staring at the player, never
+  // getting out. The fight loop's movement has no swim behaviour, so
+  // a dedicated routine owns the bot: swim UP (jump held), drive
+  // toward the nearest shore cell, hop out onto land, resume chase.
+  function headInWater () {
+    if (!bot.entity) return false
+    const p = bot.entity.position
+    const feet = bot.blockAt(p)
+    const eye = bot.blockAt(p.offset(0, 1.62, 0))
+    return !!(feet && feet.name === 'water' && eye && eye.name === 'water')
+  }
+  brain.headInWater = headInWater
+
+  // Nearest standable dry cell (empty cell + empty above + solid
+  // below) by horizontal distance — the shore to swim for.
+  function findShore () {
+    if (!bot.entity) return null
+    const bp = bot.entity.position
+    let best = null
+    let bestD = Infinity
+    for (let dx = -12; dx <= 12; dx++) {
+      for (let dz = -12; dz <= 12; dz++) {
+        for (let dy = -2; dy <= 5; dy++) {
+          const cell = new Vec3(Math.floor(bp.x) + dx, Math.floor(bp.y) + dy, Math.floor(bp.z) + dz)
+          const at = bot.blockAt(cell)
+          if (!at || at.boundingBox !== 'empty' || at.name === 'water') continue
+          const above = bot.blockAt(cell.offset(0, 1, 0))
+          if (!above || above.boundingBox !== 'empty') continue
+          const below = bot.blockAt(cell.offset(0, -1, 0))
+          if (!below || below.boundingBox !== 'block') continue
+          const d = Math.hypot(cell.x + 0.5 - bp.x, cell.z + 0.5 - bp.z)
+          if (d < bestD) { bestD = d; best = cell.offset(0.5, 0, 0.5) }
+        }
+      }
+    }
+    return best
+  }
+  brain.findShore = findShore
+
+  async function doWaterEscape () {
+    if (brain.busy) return
+    brain.busy = true
+    brain.mode = 'escape'
+    brain.stats.waterEscapes++
+    logEvent('deep water mid-fight — swimming up and out to shore')
+    try {
+      const shore = findShore()
+      const deadline = Date.now() + 9000
+      while (Date.now() < deadline) {
+        const p = bot.entity.position
+        const feetBlock = bot.blockAt(p)
+        const below = bot.blockAt(p.offset(0, -0.6, 0))
+        const onLand = !(feetBlock && feetBlock.name === 'water') && !!below && below.boundingBox === 'block' && bot.entity.onGround
+        if (onLand && !headInWater()) break
+        const dest = shore || (brain.target && brain.target.position)
+        if (dest) await bot.lookAt(new Vec3(dest.x, p.y + 0.5, dest.z), true).catch(() => {})
+        bot.setControlState('jump', true) // swim up; at the ledge, hop out
+        bot.setControlState('forward', true)
+        bot.setControlState('sprint', false)
+        await sleep(120)
+      }
+      logEvent(`water escape done: headInWater=${headInWater()}, pos=${bot.entity.position}`)
+    } catch (e) {
+      logEvent('water escape failed: ' + e.message)
+    }
+    clearControls()
+    brain.nextWaterEscapeAt = Date.now() + WATER_ESCAPE_COOLDOWN_MS
+    brain.busy = false
+    if (brain.target && brain.target.isValid) {
+      brain.mode = 'fight'
+      brain.aimPoint = null
+    } else {
+      brain.mode = 'idle'
+      brain.target = null
+      brain.targetName = null
+    }
+  }
+  brain.doWaterEscape = doWaterEscape
+
+  // CLIMB (Rafi, 2026-11-17): the fight target is ABOVE the bot and a
+  // ladder / vine / scaffolding leads up — climb to him instead of
+  // standing underneath. No digging and no 1x1 towering: climb only.
+  //
+  // Implementation (rebuilt after R4-5 runs 3-4): the pathfinder's
+  // goto could not be trusted with ladders — it left the bot pressed
+  // against the ladder's face with its centre OUTSIDE the ladder cell
+  // (x=113.7 vs the cell at 114), where vanilla never engages the
+  // climb, and its move set has no reliable ladder-top exit. So the
+  // climb is driven in phases like a player does it:
+  //   A) walk INTO the climbable column's cell at the bot's level
+  //      (a plain GoalBlock goto — the centre ends inside the cell);
+  //   B) manual drive: aim at the target, hold FORWARD (toward the
+  //      wall = up the ladder; on flat ground at the top it simply
+  //      walks), adding JUMP only when height progress stalls (the
+  //      top-out pop onto the ledge);
+  //   C) if at the target's height but still short of him, a plain
+  //      pathfinder walk across the top.
+  const CLIMBABLE_NAMES = new Set(['ladder', 'vine', 'scaffolding'])
+  function findClimbColumn () {
+    if (!bot.entity) return null
+    const bp = bot.entity.position
+    let best = null
+    let bestD = Infinity
+    for (let dx = -6; dx <= 6; dx++) {
+      for (let dz = -6; dz <= 6; dz++) {
+        for (let dy = -1; dy <= 3; dy++) {
+          const cell = new Vec3(Math.floor(bp.x) + dx, Math.floor(bp.y) + dy, Math.floor(bp.z) + dz)
+          const b = bot.blockAt(cell)
+          if (!b || !CLIMBABLE_NAMES.has(b.name)) continue
+          const d = Math.hypot(cell.x + 0.5 - bp.x, cell.z + 0.5 - bp.z)
+          if (d < bestD) { bestD = d; best = { x: cell.x, y: cell.y, z: cell.z } }
+        }
+      }
+    }
+    return best
+  }
+  brain.findClimbColumn = findClimbColumn
+
+  async function doClimb () {
+    const target = brain.target
+    if (!target || !target.isValid || !target.position || brain.busy) return
+    brain.busy = true
+    brain.mode = 'climb'
+    brain.stats.climbs++
+    logEvent(`climb: target ${target.username} is above — climbing to him`)
+    const arrivedClimb = () => target.isValid && target.position &&
+      bot.entity.position.distanceTo(target.position) <= 2.6 &&
+      (target.position.y - bot.entity.position.y) <= 1.6
+    try {
+      // Phase A: get the bot's centre INTO the climbable column.
+      const col = findClimbColumn()
+      if (col && !arrivedClimb()) {
+        try {
+          const mv = new Movements(bot)
+          mv.canDig = false
+          bot.pathfinder.setMovements(mv)
+          await Promise.race([bot.pathfinder.goto(new goals.GoalBlock(col.x, col.y, col.z)).catch(() => {}), sleep(5000)])
+          bot.pathfinder.setGoal(null)
+        } catch (e) {}
+      }
+      // Phase B: manual climb drive.
+      if (!arrivedClimb()) {
+        const dl = Date.now() + 14000
+        let lastY = bot.entity.position.y
+        let lastProgressAt = Date.now()
+        while (Date.now() < dl && brain.mode === 'climb' && target.isValid && target.position && !arrivedClimb()) {
+          stepAim(target.position.offset(0, 1.0, 0))
+          bot.setControlState('forward', true)
+          bot.setControlState('sprint', false)
+          const y = bot.entity.position.y
+          if (y > lastY + 0.05) { lastY = y; lastProgressAt = Date.now() }
+          bot.setControlState('jump', Date.now() - lastProgressAt > 1200)
+          await sleep(120)
+        }
+        clearControls()
+      }
+      // Phase C: at his height but not yet at him — walk the top.
+      if (!arrivedClimb() && target.isValid && target.position &&
+        (target.position.y - bot.entity.position.y) <= 1.2) {
+        try {
+          const mv = new Movements(bot)
+          mv.canDig = false
+          bot.pathfinder.setMovements(mv)
+          await Promise.race([bot.pathfinder.goto(new goals.GoalNear(target.position.x, target.position.y, target.position.z, 1.8)).catch(() => {}), sleep(6000)])
+          bot.pathfinder.setGoal(null)
+        } catch (e) {}
+      }
+      logEvent(`climb done: arrived=${arrivedClimb()}, pos=${bot.entity.position}`)
+    } catch (e) {
+      logEvent('climb failed: ' + e.message)
+    }
+    try { bot.pathfinder.setMovements(new Movements(bot)) } catch (e) {}
+    brain.nextClimbAt = Date.now() + CLIMB_COOLDOWN_MS
+    brain.busy = false
+    if (brain.target && brain.target.isValid) {
+      brain.mode = 'fight'
+      brain.aimPoint = null
+    } else {
+      brain.mode = 'idle'
+      brain.target = null
+      brain.targetName = null
+    }
+    clearControls()
+  }
+  brain.doClimb = doClimb
 
   // ------------------------------------------------------------ eating
   async function doEat () {
@@ -1523,22 +1863,446 @@ function attachPvpBrain (bot, opts = {}) {
       }
       return
     }
-    if (brain.mode !== 'idle' || brain.busy) return // already fighting / busy: not a new provocation
+    // Fix round 4: a hit landing DURING a fight registers the hitter
+    // as another opponent of this fight (the special-mode counter in
+    // the decision loop decides what to do about 2+ opponents). It
+    // never switches the current target by itself.
+    if (brain.mode === 'fight') { registerOpponent(attacker); return }
+    if (brain.mode !== 'idle' || brain.busy) return // busy with something else: not a new provocation
     if (kind === 'projectile' || cls === 'ranged') {
       onRangedAttack(attacker)
       return
     }
     if (cls === 'sword' || cls === 'axe' || cls === 'spear' || cls === 'mace') {
+      brain.ladder.delete(attacker.id) // a weapon settles it — the ladder no longer applies
       logEvent(`retaliation: hit by ${attacker.username} with ${weaponName} (${kind}) — engaging`)
       startRetaliation(attacker)
     } else {
-      // Bare hand or a non-weapon item: a casual hit. NO response.
-      brain.stats.ignoredHits++
-      brain.lastIgnoredHit = { name: attacker.username, weapon: weaponName || null, at: Date.now() }
-      logEvent(`retaliation: casual hit from ${attacker.username} with ${weaponName || 'bare hand'} — ignored, no response`)
+      // Bare hand / totem / any non-weapon item or block: the fix
+      // round 4 ESCALATION LADDER decides (hits 1-2 ignored, as
+      // before; then a punch back, a sword pose, then a real fight).
+      ladderHit(attacker, weaponName)
     }
   }
   brain.handleAttack = handleAttack
+
+  // ------------------------------------------ fix round 4: ladder + special
+  // (1) ESCALATION LADDER (Rafi, 2026-11-17): a player who keeps hitting
+  // the idle bot with a bare hand, a totem, or any non-weapon item/block
+  // is NOT ignored forever and NOT fought at once. Per attacker:
+  //   hit 1, hit 2 -> nothing (the old casual-hit behaviour)
+  //   hit 3        -> ONE bare-hand punch back, still no fight
+  //   hit 4        -> the bot draws its sword and just STANDS holding
+  //                   it (a visible warning), still no attack
+  //   hit 5        -> full PvP engage against that attacker
+  // The count resets when the player goes LADDER_RESET_MS without a
+  // hit. Weapon hits never touch the ladder — they engage immediately
+  // under the round-2 rules, and they clear any ladder count the
+  // player had built up.
+  function ladderHit (attacker, weaponName) {
+    const now = Date.now()
+    let entry = brain.ladder.get(attacker.id)
+    if (!entry || now - entry.lastHitAt > LADDER_RESET_MS) {
+      entry = { count: 0, lastHitAt: 0, name: attacker.username }
+      brain.ladder.set(attacker.id, entry)
+    }
+    entry.count++
+    entry.lastHitAt = now
+    entry.name = attacker.username
+    logEvent(`ladder: non-weapon hit #${entry.count} from ${attacker.username} with ${weaponName || 'bare hand'}`)
+    if (entry.count >= 5) {
+      brain.ladder.delete(attacker.id)
+      logEvent(`ladder: ${attacker.username} pushed it to hit #5 — engaging for real`)
+      startRetaliation(attacker)
+    } else if (entry.count === 4) {
+      ladderPose(attacker).catch(() => {})
+    } else if (entry.count === 3) {
+      ladderPunch(attacker).catch(() => {})
+    } else {
+      // hits 1-2: exactly the old ignore bookkeeping
+      brain.stats.ignoredHits++
+      brain.lastIgnoredHit = { name: attacker.username, weapon: weaponName || null, at: now }
+    }
+  }
+  brain.ladderHit = ladderHit
+
+  // Make the main hand GENUINELY empty on the SERVER. A quickbar
+  // switch is NOT enough: probe-punch.js (local Paper 1.21.1) showed
+  // the server still applying the OLD item to the very next attack
+  // (a full 7.5-damage netherite-sword hit with the client showing an
+  // empty hand) or eating the swing entirely. The reliable route is a
+  // real inventory move: the held stack goes into an empty main-
+  // inventory slot, leaving the selected hotbar slot truly empty.
+  // The item is MOVED, never dropped (Rafi's no-drop rule). Returns
+  // false when there is no empty slot to move it to (the caller then
+  // attacks with whatever is held — a crystal still detonates, it
+  // just is not the bare-hand click Rafi asked for).
+  async function makeHandBare () {
+    const handSlot = bot.getEquipmentDestSlot('hand')
+    if (!bot.inventory.slots[handSlot]) return true
+    const used = new Set(bot.inventory.items().map(i => i.slot))
+    let dest = -1
+    for (let s = 9; s <= 35; s++) if (!used.has(s)) { dest = s; break }
+    if (dest >= 0) {
+      await bot.moveSlotItem(handSlot, dest).catch(() => {})
+      if (!bot.inventory.slots[bot.getEquipmentDestSlot('hand')]) return true
+    }
+    // fallback: quickbar switch to an empty hotbar slot (client-side
+    // empty; the server may still apply the old item to one swing —
+    // logged by callers via the false return when even this fails)
+    for (let i = 0; i < 9; i++) {
+      if (!bot.inventory.slots[36 + i]) {
+        bot.setQuickBarSlot(i)
+        return !bot.inventory.slots[bot.getEquipmentDestSlot('hand')]
+      }
+    }
+    return false
+  }
+  brain.makeHandBare = makeHandBare
+  brain.ensureBareHand = makeHandBare // back-compat alias (now async)
+
+  // Hit 3: a single bare-hand punch. Deliberately NOT a fight: no
+  // target, no mode change — one swing and back to standing idle.
+  async function ladderPunch (attacker) {
+    if (brain.ladderBusy) return
+    brain.ladderBusy = true
+    try {
+      await sleep(reactionDelay())
+      if (brain.mode !== 'idle' || !attacker.isValid || !attacker.position) return
+      if (bot.entity.position.distanceTo(attacker.position) > 3.6) {
+        logEvent(`ladder: punch-back at ${attacker.username} skipped — he stepped out of reach`)
+        return
+      }
+      const bare = await makeHandBare()
+      // A real item change resets the attack-strength meter server-
+      // side; give the fist ~300 ms to charge so the punch lands as a
+      // real hit instead of a feather tap (probe-punch.js trial B).
+      await sleep(300)
+      if (brain.mode !== 'idle' || !attacker.isValid || !attacker.position) return
+      await bot.lookAt(attacker.position.offset(0, 1.2, 0), true)
+      bot.attack(attacker)
+      brain.stats.swings++
+      brain.stats.ladderPunches++
+      brain.lastLadderPunch = { at: Date.now(), bare, targetName: attacker.username }
+      brain.swingReadyAt = Date.now() + DEFAULT_COOLDOWN_MS + rand(0, 35)
+      logEvent(`ladder: ONE bare-hand punch back at ${attacker.username} (hit #3 warning, hand truly empty: ${bare})`)
+    } catch (e) {
+      logEvent('ladder punch failed: ' + e.message)
+    }
+    brain.ladderBusy = false
+  }
+
+  // Hit 4: sword in hand, standing still. No swing, no fight — the
+  // drawn sword IS the message. Waits out a punch still in flight so
+  // the punch stays bare-handed.
+  async function ladderPose (attacker) {
+    const deadline = Date.now() + 1200
+    while (brain.ladderBusy && Date.now() < deadline) await sleep(60)
+    if (brain.ladderBusy) return
+    brain.ladderBusy = true
+    try {
+      if (brain.mode !== 'idle') return
+      const sword = findSwordItem()
+      if (!sword) { logEvent('ladder: sword pose wanted but no sword in inventory'); return }
+      await bot.equip(sword, 'hand')
+      brain.ladderPose = { name: attacker.username, at: Date.now() }
+      brain.stats.ladderPoses++
+      logEvent(`ladder: sword drawn, standing warning pose for ${attacker.username} (hit #4)`)
+    } catch (e) {
+      logEvent('ladder pose failed: ' + e.message)
+    }
+    brain.ladderBusy = false
+  }
+
+  // (2) SPECIAL MODE bookkeeping: who is currently fighting the bot.
+  // The commanded/retaliation target registers in startFight; anyone
+  // else who lands a hit mid-fight registers in handleAttack. Entries
+  // expire ATTACKER_WINDOW_MS after their last hit (the live target's
+  // entry is refreshed by the decision loop, so a 1v1 never expires).
+  function registerOpponent (entity) {
+    if (!entity || entity === bot.entity || !entity.username) return
+    brain.opponents.set(entity.id, { name: entity.username, lastHitAt: Date.now(), entity })
+  }
+  brain.registerOpponent = registerOpponent
+
+  function recentOpponentCount (now) {
+    let n = 0
+    for (const [id, o] of brain.opponents) {
+      if (!o.entity || !o.entity.isValid || !o.entity.position || now - o.lastHitAt > ATTACKER_WINDOW_MS) {
+        brain.opponents.delete(id)
+        continue
+      }
+      n++
+    }
+    return n
+  }
+  brain.recentOpponentCount = recentOpponentCount
+
+  // Totems "nearly out" (Rafi's fallback trigger): nothing spare beyond
+  // the one sitting in the offhand.
+  function spareTotemCount () {
+    let offSlot = -1
+    try { offSlot = bot.getEquipmentDestSlot('off-hand') } catch (e) {}
+    let n = 0
+    for (const it of bot.inventory.items()) {
+      if (it.name !== 'totem_of_undying') continue
+      if (it.slot === offSlot) continue
+      n += it.count
+    }
+    return n
+  }
+  brain.spareTotemCount = spareTotemCount
+  function totemLow () { return spareTotemCount() === 0 }
+  brain.totemLow = totemLow
+
+  function hasComboMats () {
+    const items = bot.inventory.items()
+    return items.some(i => i.name === 'ender_pearl') &&
+      items.some(i => i.name === 'wind_charge') &&
+      items.some(i => i.name === 'mace')
+  }
+  brain.hasComboMats = hasComboMats
+
+  // SPECIAL MODE — crystal spam (Rafi, 2026-11-17): outnumbered, the
+  // bot stops sword-fighting fair: pearl AWAY briefly, come straight
+  // back, then obsidian + end crystal placed as fast as the server
+  // accepts them and each crystal DETONATED BY A BARE-HAND CLICK
+  // (placing alone does not count — the crystal must explode). No
+  // humanized delays, no aim cap, no cover in this mode: speed is the
+  // whole point (Rafi explicitly waived the humanizing here). Chains
+  // up to CRYSTAL_SPAM_MAX blasts, retargeting to another live
+  // opponent when the current one drops, then back to the sword.
+  async function doCrystalSpam () {
+    const target = brain.target
+    if (!target || !target.isValid || !target.position) return
+    brain.busy = true
+    brain.mode = 'crystalspam'
+    clearControls()
+    try { bot.pathfinder.setGoal(null) } catch (e) {}
+    const startedAt = Date.now()
+    const result = { blasts: 0, reason: null, startedAt, firstBlastAt: null, bareHand: false, targetName: brain.targetName }
+    brain.lastCrystalSpam = result
+    brain.stats.specialModes++
+    logEvent(`SPECIAL MODE: outnumbered (${recentOpponentCount(startedAt)} opponents) — crystal spam on ${brain.targetName}`)
+    try {
+      // 1) brief distance first (Rafi: move away, then come back in)
+      if (target.position && bot.inventory.items().some(i => i.name === 'ender_pearl')) {
+        await pearlAwayFrom(target.position, 12, 2)
+      }
+      // 2) the chain
+      while (result.blasts < CRYSTAL_SPAM_MAX && Date.now() - startedAt < CRYSTAL_SPAM_CAP_MS) {
+        if (brain.mode !== 'crystalspam') { result.reason = 'interrupted'; break }
+        let t = (brain.target && brain.target.isValid && brain.target.position) ? brain.target : null
+        if (!t) {
+          for (const o of brain.opponents.values()) {
+            if (o.entity && o.entity.isValid && o.entity.position) {
+              t = o.entity
+              brain.target = t
+              brain.targetName = t.username
+              logEvent(`crystal spam: retargeting to ${t.username}`)
+              break
+            }
+          }
+        }
+        if (!t) { result.reason = 'all opponents gone'; break }
+        const mats = crystalMaterials()
+        if (!mats.obsidian || !mats.crystal) { result.reason = 'out of obsidian or crystals'; break }
+        // close back in to placing distance — fast, no finesse. The
+        // opening pearl-away lands FAR (~36 blocks, the known pearl
+        // ballistics deviation), so if the gap is big the bot pearls
+        // straight back toward the target first, then pathfinds with
+        // a longer deadline (run-2 failure: a 3.5 s walk-back never
+        // arrived, so no spot was ever in reach).
+        const gapNow = t.position.distanceTo(bot.entity.position)
+        if (gapNow > 6 && bot.inventory.items().some(i => i.name === 'ender_pearl')) {
+          const dir = t.position.minus(bot.entity.position)
+          dir.y = 0
+          if (dir.norm() > 0.01) {
+            dir.normalize()
+            await throwPearlDirection(dir, Math.min(14, gapNow * 0.7)).catch(() => {})
+          }
+        }
+        if (t.isValid && t.position && t.position.distanceTo(bot.entity.position) > 2.9) {
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(t.position.x, t.position.y, t.position.z, 2.0))
+            const dl = Date.now() + 6000
+            while (Date.now() < dl && brain.mode === 'crystalspam' && t.isValid && t.position && t.position.distanceTo(bot.entity.position) > 2.9) await sleep(70)
+            bot.pathfinder.setGoal(null)
+          } catch (e) {}
+        }
+        if (brain.mode !== 'crystalspam' || !t.isValid || !t.position) break
+        // an already-placed crystal near the target is detonated first
+        let crystalEntity = Object.values(bot.entities).find(e =>
+          e && e.position && e.position.distanceTo(t.position) < 3.2 &&
+          ((e.name || '').includes('crystal') || (e.displayName || '').includes('Crystal')))
+        if (!crystalEntity) {
+          brain.target = t // findCrystalSpot reads the brain target
+          let spot = findCrystalSpot()
+          // retry: shuffle closer and look again instead of giving up
+          // on the first null (the target may have drifted meanwhile)
+          for (let attempt = 0; !spot && attempt < 3 && brain.mode === 'crystalspam' && t.isValid && t.position; attempt++) {
+            try {
+              bot.pathfinder.setGoal(new goals.GoalNear(t.position.x, t.position.y, t.position.z, 1.6))
+              const dl2 = Date.now() + 2500
+              while (Date.now() < dl2 && brain.mode === 'crystalspam' && t.isValid && t.position) {
+                spot = findCrystalSpot()
+                if (spot) break
+                await sleep(80)
+              }
+              bot.pathfinder.setGoal(null)
+            } catch (e) {}
+            spot = spot || findCrystalSpot()
+          }
+          if (!spot) { result.reason = 'no placeable spot near the target'; break }
+          const below = bot.blockAt(spot.offset(0, -1, 0))
+          try {
+            await bot.equip(mats.obsidian, 'hand')
+            await bot.placeBlock(below, new Vec3(0, 1, 0))
+            await sleep(110)
+            const placed = bot.blockAt(spot)
+            if (!placed || placed.name !== 'obsidian') throw new Error('obsidian did not register')
+          } catch (e) { result.reason = 'obsidian placement failed: ' + e.message; break }
+          const matsNow = crystalMaterials()
+          if (!matsNow.crystal) { result.reason = 'out of crystals mid-chain'; break }
+          try {
+            await bot.equip(matsNow.crystal, 'hand')
+            await bot.placeBlock(bot.blockAt(spot), new Vec3(0, 1, 0))
+          } catch (e) {
+            // EXPECTED, not a failure: placeBlock always rejects for
+            // end crystals ("the block is still air") because a
+            // crystal is an ENTITY — the block mineflayer waits to see
+            // change stays air even though the crystal spawned. (The
+            // round-3 finisher hits the same rejection and survives it
+            // by re-finding the entity.) The entity lookup below is
+            // the real verdict on whether the placement worked.
+          }
+          await sleep(120)
+          crystalEntity = Object.values(bot.entities).find(e =>
+            e && e.position && e.position.distanceTo(spot.offset(0.5, 1, 0.5)) < 2.2 &&
+            ((e.name || '').includes('crystal') || (e.displayName || '').includes('Crystal')))
+          if (!crystalEntity) { result.reason = 'crystal entity did not appear after placement'; break }
+        }
+        // DETONATE — bare hand (Rafi's explicit rule for this mode);
+        // the hand is emptied with a real inventory move, not just a
+        // quickbar switch (probe-punch.js showed the switch is not
+        // honoured by the server for the very next attack)
+        result.bareHand = await makeHandBare()
+        await bot.lookAt(crystalEntity.position.offset(0, 0.4, 0), true)
+        bot.attack(crystalEntity)
+        brain.stats.crystalBlasts++
+        brain.stats.crystalSpamBlasts++
+        result.blasts++
+        if (!result.firstBlastAt) result.firstBlastAt = Date.now()
+        logEvent(`crystal spam: blast #${result.blasts} on ${t.username} (bare-hand detonation: ${result.bareHand})`)
+        await sleep(90)
+      }
+    } catch (e) {
+      result.reason = e.message
+      logEvent('crystal spam stopped: ' + e.message)
+    }
+    if (!result.reason) result.reason = result.blasts >= CRYSTAL_SPAM_MAX ? 'chain complete' : 'stopped'
+    result.durationMs = Date.now() - startedAt
+    logEvent(`crystal spam done: ${JSON.stringify(result)}`)
+    const sword = findSwordItem()
+    if (sword) await bot.equip(sword, 'hand').catch(() => {})
+    brain.nextSpecialAt = Date.now() + SPECIAL_COOLDOWN_MS
+    brain.busy = false
+    if (brain.target && brain.target.isValid && brain.mode === 'crystalspam') {
+      brain.mode = 'fight'
+      brain.aimPoint = null
+    } else if (brain.mode === 'crystalspam') {
+      brain.mode = 'idle'
+      brain.target = null
+      brain.targetName = null
+    }
+    clearControls()
+  }
+  brain.doCrystalSpam = doCrystalSpam
+
+  // Another player's health as this client can read it: mineflayer
+  // exposes entity.health when the entity's health metadata is being
+  // tracked; otherwise the raw living-entity health metadata slot is
+  // the fallback. null = unreadable (callers treat it as "highest",
+  // so a known-hurt opponent always wins the pick).
+  function entityHealth (e) {
+    if (!e) return null
+    if (typeof e.health === 'number' && isFinite(e.health) && e.health > 0) return e.health
+    const m = e.metadata && e.metadata[9]
+    if (typeof m === 'number' && isFinite(m) && m > 0) return m
+    return null
+  }
+  brain.entityHealth = entityHealth
+
+  // Multi-attacker mace targeting (Rafi, 2026-11-17 22:29):
+  //  * INITIAL PICK = the LOWEST-health live opponent (re-picked the
+  //    same way after every kill);
+  //  * NO MID-KILL SWITCHING: once the mace has HIT a player, that
+  //    player stays the combo target until he is DEAD — Wind Burst
+  //    launches the bot after the hit and it dives back onto the same
+  //    player, even if someone else's health drops lower meanwhile;
+  //  * only a death (or the target vanishing) releases the lock.
+  function pickLowestHealthOpponent () {
+    let best = null
+    let bestHp = Infinity
+    for (const o of brain.opponents.values()) {
+      const e = o.entity
+      if (!e || !e.isValid || !e.position) continue
+      const hp = entityHealth(e)
+      const v = hp === null ? Infinity : hp
+      if (v < bestHp) { bestHp = v; best = e }
+    }
+    return best
+  }
+  brain.pickLowestHealthOpponent = pickLowestHealthOpponent
+
+  function pickMaceTarget () {
+    if (brain.maceLockTargetId) {
+      const locked = bot.entities[brain.maceLockTargetId]
+      if (locked && locked.isValid && locked.position) return locked
+      brain.maceLockTargetId = null // he died / vanished — the lock releases
+    }
+    return pickLowestHealthOpponent() || ((brain.target && brain.target.isValid) ? brain.target : null)
+  }
+  brain.pickMaceTarget = pickMaceTarget
+
+  // SPECIAL MODE — mace combo (Rafi's revised flow, 2026-11-17
+  // 22:20): outnumbered, after at most 2 crystal blasts the bot goes
+  // aerial — pearl + wind-charge + mace (Phase-2 machinery, now with
+  // capped aim) — and STAYS on the combo while outnumbered, working
+  // through the attackers lowest-health-first with the hit-lock
+  // above. startCombo owns the bot while it runs and ends in idle;
+  // if the target is still standing, the sword fight resumes against
+  // the SAME player.
+  async function doMaceCombo () {
+    const target = pickMaceTarget()
+    if (!target) return
+    brain.nextComboAt = Date.now() + MULTI_COMBO_COOLDOWN_MS
+    brain.nextMaceFallbackAt = Date.now() + MACE_FALLBACK_COOLDOWN_MS
+    brain.stats.maceFallbacks++
+    brain.stats.maceCombos++
+    brain.lastMaceFallback = { at: Date.now(), targetName: target.username, totemSpares: spareTotemCount() }
+    brain.lastCombo = { at: Date.now(), targetName: target.username, locked: brain.maceLockTargetId === target.id, healthSeen: entityHealth(target) }
+    logEvent(`SPECIAL MODE: mace combo on ${target.username} (${brain.maceLockTargetId === target.id ? 'locked target' : 'lowest-health pick'}, health seen: ${entityHealth(target)})`)
+    // the interim sword fight stays on the same player too
+    brain.target = target
+    brain.targetName = target.username
+    await startCombo(target)
+    // A landed mace hit LOCKS this target until he dies (Rafi's rule).
+    if (brain.comboResult && brain.comboResult.maceSwung && target.isValid) {
+      brain.maceLockTargetId = target.id
+      logEvent(`mace combo: hit landed on ${target.username} — target LOCKED until he dies`)
+    }
+    if (!target.isValid) brain.maceLockTargetId = null
+    if (target.isValid && bot.health > 0 && brain.mode === 'idle') {
+      brain.mode = 'fight'
+      brain.target = target
+      brain.targetName = target.username
+      brain.aimPoint = null
+      logEvent('mace combo done — back to the fight on the same target')
+    }
+  }
+  brain.doMaceCombo = doMaceCombo
+  brain.doMaceFallback = doMaceCombo // back-compat alias
 
   // Primary attribution: the vanilla damage_event packet (1.20.2+).
   function onDamageEvent (pkt) {
@@ -1615,10 +2379,11 @@ function attachPvpBrain (bot, opts = {}) {
     const deadline = Date.now() + 4500
     let swung = false
     while (Date.now() < deadline) {
+      if (brain.mode !== 'combo') break // cancelled / superseded mid-dive
       if (!target.isValid || !target.position) break
       const bp = bot.entity.position
       if (bp.y > peakY) peakY = bp.y
-      await bot.lookAt(target.position.offset(0, 1.2, 0), true)
+      stepAim(target.position.offset(0, 1.2, 0)) // capped aim (round 4 revision — no snaps in the combo)
       const horiz = Math.hypot(target.position.x - bp.x, target.position.z - bp.z)
       // Gentle steering only — NO sprint in the air: a probe of the failed
       // suite run showed sprint-drift overshooting the target by ~7
@@ -1672,7 +2437,7 @@ function attachPvpBrain (bot, opts = {}) {
     const wc = byName('wind_charge')
     if (!wc) throw new Error('no wind charge in inventory')
     await bot.equip(wc, 'hand')
-    await bot.lookAt(bot.entity.position.offset(0, -4, 0), true)
+    await aimAtSmooth(bot.entity.position.offset(0, -4, 0), 400) // capped aim (round 4 revision)
     const groundY = bot.entity.position.y
     bot.activateItem()
     step('wind charge thrown at feet')
@@ -1715,7 +2480,7 @@ function attachPvpBrain (bot, opts = {}) {
       // Flat throw: a local ballistics probe showed steep pearl arcs fly
       // 25-50 blocks (far past any arena target), while a near-flat throw
       // lands ~10 blocks out and a down-forward throw ~3.
-      await bot.lookAt(eye.plus(dirTo.scaled(10)).offset(0, 0.8, 0), true)
+      await aimAtSmooth(eye.plus(dirTo.scaled(10)).offset(0, 0.8, 0), 600) // capped aim (round 4 revision)
       const from1 = bot.entity.position.clone()
       bot.activateItem()
       step('pearl #1 thrown flat toward target')
@@ -1743,7 +2508,7 @@ function attachPvpBrain (bot, opts = {}) {
         if (dir2.norm() === 0) dir2.x = 1
         dir2.normalize()
         const eye2 = bot.entity.position.offset(0, 1.62, 0)
-        await bot.lookAt(eye2.plus(dir2.scaled(3)).offset(0, -1.2, 0), true)
+        await aimAtSmooth(eye2.plus(dir2.scaled(3)).offset(0, -1.2, 0), 500) // capped aim (round 4 revision)
         const from2 = bot.entity.position.clone()
         bot.activateItem()
         step('pearl #2 thrown toward target from the air')
@@ -1762,6 +2527,7 @@ function attachPvpBrain (bot, opts = {}) {
           // and dive from that height. One retry if the dive misses.
           result.path = 'wind-charge relaunch above the target, then dive (pearl landing could not be smashed from)'
           for (let attempt = 1; attempt <= 2 && !dived; attempt++) {
+            if (cancelled()) throw new Error('combo cancelled')
             const h = Math.hypot(entity.position.x - bot.entity.position.x, entity.position.z - bot.entity.position.z)
             if (h > 2.6) {
               step(`closing in on the ground (${h.toFixed(1)} blocks out)`)
@@ -1769,7 +2535,7 @@ function attachPvpBrain (bot, opts = {}) {
               while (Date.now() < closeDeadline) {
                 const hh = Math.hypot(entity.position.x - bot.entity.position.x, entity.position.z - bot.entity.position.z)
                 if (hh <= 2.6) break
-                await bot.lookAt(entity.position.offset(0, 1.2, 0), true)
+                stepAim(entity.position.offset(0, 1.2, 0)) // capped aim (round 4 revision)
                 bot.setControlState('forward', true)
                 bot.setControlState('sprint', true)
                 await sleep(50)
@@ -2046,7 +2812,36 @@ function attachPvpBrain (bot, opts = {}) {
         brain.retaliationOutSince = 0
       }
     }
+    // Fix round 4 revision: PERSISTENT FINISHER CLOCK. Accumulated
+    // fight time grows ONLY while the bot is in 'fight' mode against
+    // the clock's target; every other mode (eat, escape, pearl-out,
+    // idle stand-down...) PAUSES it. Leaving fight mode starts a
+    // grace countdown — re-engaging the same target inside the grace
+    // window keeps the accumulated time; past it, the clock wipes.
+    {
+      const dtClock = Math.max(0, Math.min(500, now - (brain.lastClockTickAt || now)))
+      brain.lastClockTickAt = now
+      if (brain.prevDecisionMode === 'fight' && brain.mode !== 'fight' &&
+        brain.fightClockTargetId !== null && !brain.fightClockExpiresAt) {
+        brain.fightClockExpiresAt = now + FIGHT_CLOCK_GRACE_MS
+      }
+      brain.prevDecisionMode = brain.mode
+      if (brain.mode === 'fight' && brain.target && brain.fightClockTargetId === brain.target.id) {
+        brain.fightTimeMs += dtClock
+        brain.fightClockExpiresAt = 0
+      } else if (brain.fightClockTargetId !== null && brain.fightClockExpiresAt && now > brain.fightClockExpiresAt) {
+        brain.fightTimeMs = 0
+        brain.fightClockTargetId = null
+        brain.fightClockExpiresAt = 0
+      }
+    }
     if (brain.mode === 'fight' && !brain.eating) {
+      // fix round 4: opponent bookkeeping — the live target's entry is
+      // refreshed so a 1v1 never expires; 2+ distinct recent opponents
+      // opens special territory and starts its clock.
+      if (brain.target) registerOpponent(brain.target)
+      const oppCount = recentOpponentCount(now)
+      if (oppCount >= 2) { if (!brain.specialSince) brain.specialSince = now } else brain.specialSince = 0
       // totem upkeep (+ pop detection)
       if (now - brain.lastTotemCheckAt > 400) {
         brain.lastTotemCheckAt = now
@@ -2084,6 +2879,16 @@ function attachPvpBrain (bot, opts = {}) {
         brain.threatSeenAt = 0
         brain.threatItem = null
       }
+      // fix round 4: CLIMB — the target is well above the bot and
+      // close horizontally: climb (ladder/vine/scaffolding) instead
+      // of standing underneath him.
+      if (!brain.busy && !brain.eating && brain.target && brain.target.position && now >= brain.nextClimbAt && !headInWater()) {
+        const dyT = brain.target.position.y - bot.entity.position.y
+        const hdT = Math.hypot(brain.target.position.x - bot.entity.position.x, brain.target.position.z - bot.entity.position.z)
+        if (dyT >= CLIMB_MIN_DY && hdT <= CLIMB_MAX_HORIZ) {
+          doClimb().catch(() => {})
+        }
+      }
       // fix round 3: pearl chase — the target ran far away and stays
       // away; pearl to him and resume. Skipped at low health (a pearl
       // costs health on landing) and while another action owns the bot.
@@ -2096,12 +2901,32 @@ function attachPvpBrain (bot, opts = {}) {
           }
         } else brain.farSince = 0
       }
-      // fix round 3: crystal finisher — the sword fight against this
-      // same target has dragged on too long; switch to crystals (the
+      // fix round 4 REVISED SPECIAL MODE (Rafi, 2026-11-17 22:20):
+      // 2+ opponents -> AT MOST 2 fast crystal blasts (once per
+      // outnumbered episode), then the aerial MACE COMBO, repeated
+      // while still outnumbered (a 3rd attacker changes nothing).
+      // Totem-low no longer gates the combo — it is the primary flow.
+      // Checked BEFORE the 45 s finisher: outnumbered is urgent.
+      if (oppCount >= 2) brain.multiSeenAt = now
+      else if (brain.multiCrystalDone && now - (brain.multiSeenAt || 0) > 10000) brain.multiCrystalDone = false
+      if (!brain.busy && oppCount >= 2) {
+        const comboMats = hasComboMats()
+        const matsS = crystalMaterials()
+        const spamMats = !!(matsS.obsidian && matsS.crystal)
+        if (!brain.multiCrystalDone && spamMats && now >= brain.nextSpecialAt) {
+          brain.multiCrystalDone = true
+          doCrystalSpam().catch(() => {})
+        } else if (comboMats && now >= brain.nextComboAt && (brain.multiCrystalDone || !spamMats)) {
+          doMaceCombo().catch(() => {})
+        }
+      }
+      // fix round 3 + 4 revision: crystal finisher — the ACCUMULATED
+      // sword fight against this same target (persistent clock above)
+      // has dragged past the threshold; switch to crystals (the
       // finisher itself falls back to the sword when materials end).
-      if (!brain.busy && !brain.eating && brain.fightStartedAt &&
-        brain.target && brain.target.id === brain.fightTargetId &&
-        now - brain.fightStartedAt >= (brain.crystalAfterMs || CRYSTAL_AFTER_MS) &&
+      if (!brain.busy && !brain.eating &&
+        brain.target && brain.target.id === brain.fightClockTargetId &&
+        brain.fightTimeMs >= (brain.crystalAfterMs || CRYSTAL_AFTER_MS) &&
         now >= brain.nextCrystalAt) {
         const mats = crystalMaterials()
         if (mats.obsidian && mats.crystal && mats.cover) doCrystalFinisher().catch(() => {})
@@ -2121,6 +2946,19 @@ function attachPvpBrain (bot, opts = {}) {
           bot.equip(sword, 'hand').catch(() => {})
           logEvent('spear gap-close done — sword re-equipped')
         }
+      }
+      // fix round 4: WATER ESCAPE — head under water mid-fight for
+      // more than a moment: swim out to shore and resume (Rafi saw
+      // the bot stand underwater staring, twice). Runs before the
+      // cobweb/fire checks: drowning stillness is the worse bug.
+      if (!brain.busy && !brain.eating) {
+        if (headInWater()) {
+          if (!brain.deepWaterSince) brain.deepWaterSince = now
+          else if (now - brain.deepWaterSince > DEEP_WATER_CONFIRM_MS && now >= brain.nextWaterEscapeAt) {
+            brain.deepWaterSince = 0
+            doWaterEscape().catch(() => {})
+          }
+        } else brain.deepWaterSince = 0
       }
       // fix round 3d: cobweb escape + fire/water bucket
       if (!brain.busy && !brain.eating) {
@@ -2162,6 +3000,14 @@ function attachPvpBrain (bot, opts = {}) {
     }
     brain.retaliation = false
     brain.retaliationOutSince = 0
+    brain.ladder.clear() // fix round 4: death wipes provocations + opponents
+    brain.opponents.clear()
+    brain.specialSince = 0
+    brain.fightClockTargetId = null // fix round 4 revision: death wipes the finisher clock
+    brain.fightTimeMs = 0
+    brain.fightClockExpiresAt = 0
+    brain.maceLockTargetId = null
+    brain.multiCrystalDone = false
     brain.mode = 'idle'
     brain.target = null
     clearControls()
