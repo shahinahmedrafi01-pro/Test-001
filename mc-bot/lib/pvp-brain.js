@@ -216,6 +216,11 @@ function attachPvpBrain (bot, opts = {}) {
     nextPearlChaseAt: 0,
     nextCrystalAt: 0,
     crystalAfterMs: 0, // test override; 0 = CRYSTAL_AFTER_MS
+    // fix round 3d (cobweb escape + fire/water bucket)
+    webSince: 0,
+    nextWebEscapeAt: 0,
+    fireSince: 0,
+    nextWaterAt: 0,
     lastCrystal: null, // last crystal-finisher result { blasts, botDamage, reason }
     stuckPos: null, // obstacle-hop tracking (pushing forward, not moving)
     stuckSince: 0,
@@ -230,7 +235,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, crystalBlasts: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, webEscapes: 0, waterUses: 0, crystalBlasts: 0 },
     events: [],
     debugParticles: []
   }
@@ -997,6 +1002,134 @@ function attachPvpBrain (bot, opts = {}) {
     clearControls()
   }
   brain.doCrystalFinisher = doCrystalFinisher
+
+  // --------------------------------------- fix round 3d: cobweb + fire
+  // Rafi (2026-11-17): (1) stuck in a cobweb mid-fight -> ender pearl
+  // 10-15 blocks away to escape, recover, then re-engage. (2) On fire
+  // and the fire is really hurting -> place the water bucket at its
+  // feet and pick it straight back up (he stocks one in the inventory).
+  async function throwPearlDirection (dir, dist) {
+    const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
+    if (!pearl) return false
+    await bot.equip(pearl, 'hand').catch(() => {})
+    const before = bot.entity.position.clone()
+    await bot.lookAt(bot.entity.position.plus(dir.scaled(dist)).offset(0, 2.4, 0), true)
+    bot.activateItem()
+    return waitTeleported(before, 1300)
+  }
+
+  // Pearl AWAY from a position, turning ~120 degrees between retries.
+  async function pearlAwayFrom (fromPos, dist, tries) {
+    const away0 = bot.entity.position.minus(fromPos)
+    away0.y = 0
+    if (away0.norm() <= 0.01) return false
+    away0.normalize()
+    for (let attempt = 0; attempt < tries; attempt++) {
+      const ang = attempt * 2.1 + rand(-0.25, 0.25)
+      const dir = new Vec3(
+        away0.x * Math.cos(ang) - away0.z * Math.sin(ang), 0,
+        away0.x * Math.sin(ang) + away0.z * Math.cos(ang))
+      if (await throwPearlDirection(dir, dist)) return true
+    }
+    return false
+  }
+
+  function inCobweb () {
+    if (!bot.entity) return false
+    const p = bot.entity.position
+    const a = bot.blockAt(p)
+    const b = bot.blockAt(p.offset(0, 0.6, 0))
+    return (a && a.name === 'cobweb') || (b && b.name === 'cobweb')
+  }
+
+  function isOnFire () {
+    const e = bot.entity
+    if (!e) return false
+    if (typeof e.onFire === 'boolean') return e.onFire
+    const m = e.metadata && e.metadata[0]
+    return typeof m === 'number' ? (m & 0x01) !== 0 : false
+  }
+
+  async function doCobwebEscape () {
+    if (brain.busy) return
+    brain.busy = true
+    brain.mode = 'escape'
+    const targetAtStart = brain.target
+    brain.stats.webEscapes++
+    logEvent('stuck in a cobweb — pearling out')
+    try {
+      let out = false
+      if (targetAtStart && targetAtStart.position) {
+        out = await pearlAwayFrom(targetAtStart.position, 12.5, 2)
+      }
+      if (!out) {
+        const yaw = bot.entity.yaw
+        await throwPearlDirection(new Vec3(-Math.sin(yaw), 0, -Math.cos(yaw)), 12.5)
+      }
+      const sword = findSwordItem()
+      if (sword) await bot.equip(sword, 'hand').catch(() => {})
+      // hurt after the escape? let the heal rule fire immediately
+      if (bot.health <= 10) brain.lastEatAt = 0
+    } catch (e) {
+      logEvent('cobweb escape failed: ' + e.message)
+    }
+    brain.nextWebEscapeAt = Date.now() + 6000
+    brain.busy = false
+    if (brain.target && brain.target.isValid) {
+      brain.mode = 'fight'
+      brain.aimPoint = null
+    } else {
+      brain.mode = 'idle'
+      brain.target = null
+    }
+  }
+
+  async function doWaterBucket () {
+    if (brain.busy) return
+    const bucket = bot.inventory.items().find(i => i.name === 'water_bucket')
+    if (!bucket) return
+    brain.busy = true
+    brain.mode = 'escape' // hold position ~1s so the scoop-back lands
+    try { bot.pathfinder.setGoal(null) } catch (e) {}
+    brain.stats.waterUses++
+    logEvent('on fire and it is hurting — water bucket at my feet')
+    try {
+      await bot.equip(bucket, 'hand')
+      // placeBlock is REFUSED for the bot's own feet cell (probe-
+      // water.js) — the vanilla way works: look straight down and
+      // use the bucket; the server raycasts and puts the water in
+      // the feet cell. A second look-down + use scoops it back.
+      await bot.equip(bucket, 'hand')
+      try { bot.clearControlStates() } catch (e) {}
+      const placePos = bot.entity.position.clone()
+      await bot.lookAt(placePos.offset(0, -1, 0), true)
+      bot.activateItem()
+      await sleep(400) // water is down, fire is out
+      // Scoop it straight back up. The empty bucket only fills from a
+      // SOURCE block — if the bot drifted into the flowing edge, a
+      // straight-down use misses, so aim at the placed source cell.
+      const srcCell = placePos.floored().offset(0.5, 0.4, 0.5)
+      for (let i = 0; i < 3; i++) {
+        await bot.lookAt(srcCell, true)
+        bot.activateItem()
+        await sleep(350)
+        if (bot.inventory.items().some(it => it.name === 'water_bucket')) break
+      }
+      const sword = findSwordItem()
+      if (sword) await bot.equip(sword, 'hand').catch(() => {})
+    } catch (e) {
+      logEvent('water bucket failed: ' + e.message)
+    }
+    brain.nextWaterAt = Date.now() + 5000
+    brain.busy = false
+    if (brain.target && brain.target.isValid) {
+      brain.mode = 'fight'
+      brain.aimPoint = null
+    } else {
+      brain.mode = 'idle'
+      brain.target = null
+    }
+  }
 
   // ------------------------------------------------------------ eating
   async function doEat () {
@@ -1989,8 +2122,32 @@ function attachPvpBrain (bot, opts = {}) {
           logEvent('spear gap-close done — sword re-equipped')
         }
       }
-      // eat check
-      if (bot.health <= 10 && bot.health > 0 && now - brain.lastEatAt > 6000) {
+      // fix round 3d: cobweb escape + fire/water bucket
+      if (!brain.busy && !brain.eating) {
+        if (inCobweb()) {
+          if (!brain.webSince) brain.webSince = now
+          // Rafi (2026-11-17): escape IMMEDIATELY when a web lands on
+          // the bot — the 150 ms here is just two decision ticks of
+          // confirmation, not a wait.
+          if (now - brain.webSince > 150 && now >= brain.nextWebEscapeAt) {
+            brain.webSince = 0
+            doCobwebEscape().catch(() => {})
+          }
+        } else brain.webSince = 0
+        if (isOnFire()) {
+          if (!brain.fireSince) brain.fireSince = now
+          // Rafi: if the fire has not gone out by itself within
+          // ~2-3 seconds, put it out with the water bucket.
+          if (now - brain.fireSince > 2500 && now >= brain.nextWaterAt &&
+            bot.inventory.items().some(i => i.name === 'water_bucket')) {
+            doWaterBucket().catch(() => {})
+          }
+        } else brain.fireSince = 0
+      }
+      // eat check (gated on busy + fight mode since round 3d: an
+      // ungated doEat once fired DURING a cobweb escape and the two
+      // sequences fought over the bot)
+      if (!brain.busy && brain.mode === 'fight' && bot.health <= 10 && bot.health > 0 && now - brain.lastEatAt > 6000) {
         const apple = bot.inventory.items().find(i => i.name === 'golden_apple')
         if (apple) doEat().catch(() => {})
       }
