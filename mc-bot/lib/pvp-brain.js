@@ -117,7 +117,19 @@ const RETALIATE_LEASH_MS = 8000 // ...for this long -> give up and stand idle
 const PEARL_CHASE_MIN_BLOCKS = 14 // target farther than this, sustained...
 const PEARL_CHASE_SUSTAIN_MS = 1200 // ...for this long -> pearl to him
 const PEARL_CHASE_COOLDOWN_MS = 4000
-const CRYSTAL_AFTER_MS = 45000 // sword fight vs the same target dragging this long -> crystals
+const CRYSTAL_AFTER_MS = 45000
+// Round 5: totem pop -> offhand refill delay window. Round 3b's
+// 500-1100 ms delay still tripped TotemGuard AutoTotemA on EVERY pop
+// on the live server (2026-11-18, VL 1/4 -> 4/4 -> kick), so the
+// refill is now slower AND uses the human method: the totem is staged
+// into a hotbar slot and swapped into the offhand with the F-key swap
+// packet (block_dig status 6, SWAP_ITEM_WITH_OFFHAND) — the exact
+// packet a vanilla client sends — instead of mineflayer's equip(),
+// which lands the totem via two raw window clicks into slot 45.
+// mineflayer 4.39 has no bot.swapHandItems(); the packet is written
+// directly (probe-verified on the local Paper 1.21.1 server).
+const TOTEM_REFILL_MIN_MS = 900
+const TOTEM_REFILL_MAX_MS = 1800 // sword fight vs the same target dragging this long -> crystals
 const CRYSTAL_COOLDOWN_MS = 20000
 // Fix round 4 (Rafi's specs, 2026-11-17 evening):
 //  * ESCALATION LADDER for non-weapon attackers (bare hand, a totem or
@@ -251,7 +263,16 @@ function attachPvpBrain (bot, opts = {}) {
     // survival
     lastTotemCheckAt: 0,
     offhandWasTotem: false,
-    totemReequipAt: 0, // fix round 3b: human-delayed totem re-equip (TotemGuard)
+    // Round 5 totem-refill choke point state. EVERY offhand totem
+    // refill goes through requestTotemRefill/maybePerformTotemRefill;
+    // lastTotemPopAt anchors the human delay to the pop itself.
+    lastTotemPopAt: 0,       // ms epoch of the last detected totem pop
+    totemRefillDueAt: 0,     // earliest time the pending refill may land
+    totemRefillWanted: false,
+    totemRefillBusy: false,  // the async refill sequence is running
+    totemStagedSlot: -1,     // hotbar window slot (36-44) holding the staged totem
+    totemRefillMinMs: 0,     // test override (0 = TOTEM_REFILL_MIN_MS)
+    totemRefillMaxMs: 0,     // test override (0 = TOTEM_REFILL_MAX_MS) // fix round 3b: human-delayed totem re-equip (TotemGuard)
     turnCapYaw: 0.55, // fix round 3b: capped head-turn rate (AntiCheat Aim)
     turnCapPitch: 0.45,
     lastEatAt: 0,
@@ -316,7 +337,7 @@ function attachPvpBrain (bot, opts = {}) {
     lastRepair: null,
     lungeResult: null,
     // stats / events for tests and reporting
-    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, webEscapes: 0, waterUses: 0, crystalBlasts: 0, ladderPunches: 0, ladderPoses: 0, crystalSpamBlasts: 0, specialModes: 0, maceFallbacks: 0, waterEscapes: 0, climbs: 0, maceCombos: 0 },
+    stats: { swings: 0, critSwings: 0, critVerified: 0, critParticlesSeen: 0, gapplesEaten: 0, totemPops: 0, totemRefillsSwap: 0, totemRefillsFallback: 0, pearlOuts: 0, armorSwaps: 0, xpBottlesUsed: 0, spearLunges: 0, opponentSwings: 0, retaliations: 0, shieldBlocks: 0, ignoredHits: 0, pearlChases: 0, healPearls: 0, webEscapes: 0, waterUses: 0, crystalBlasts: 0, ladderPunches: 0, ladderPoses: 0, crystalSpamBlasts: 0, specialModes: 0, maceFallbacks: 0, waterEscapes: 0, climbs: 0, maceCombos: 0 },
     events: [],
     debugParticles: []
   }
@@ -519,7 +540,10 @@ function attachPvpBrain (bot, opts = {}) {
       await bot.equip(best, dest).catch(() => {})
     }
     await organizeHotbar()
-    await equipTotemOffhand()
+    // Round 5: via the choke point. With no recent pop this lands
+    // immediately; if a totem popped moments ago it stays pending
+    // until the human delay elapses (the upkeep lands it mid-fight).
+    await requestTotemRefill('prepare')
     bot.setQuickBarSlot(0)
     const hotbar = []
     for (let i = 0; i < 6; i++) {
@@ -530,16 +554,190 @@ function attachPvpBrain (bot, opts = {}) {
     return { hotbar, offhand: off ? off.name : null }
   }
   brain.prepareFight = prepareFight
+  brain.noteTotemPop = noteTotemPop
+  brain.requestTotemRefill = requestTotemRefill
 
-  async function equipTotemOffhand () {
-    const offSlot = bot.getEquipmentDestSlot('off-hand')
-    const off = bot.inventory.slots[offSlot]
-    if (off && off.name === 'totem_of_undying') { brain.offhandWasTotem = true; return }
-    const totem = bot.inventory.items().find(i => i.name === 'totem_of_undying')
-    if (totem) {
-      await bot.equip(totem, 'off-hand').catch(() => {})
-      brain.offhandWasTotem = true
+  // ---- Round 5: the totem-refill choke point ---------------------
+  // EVERY refill of a totem into the offhand goes through here:
+  // prepareFight (pre-fight kit), endBlock (shield restore), the
+  // decision-loop upkeep, and bot.js's idle upkeep (via
+  // brain.requestTotemRefill). Two properties:
+  //   1. Delay: after a pop, the refill may not land until a
+  //      randomized TOTEM_REFILL_MIN_MS..MAX_MS window has passed,
+  //      anchored to the pop (brain.lastTotemPopAt), no matter which
+  //      caller asks. Requests with no recent pop (kit time, shield
+  //      restore) are due immediately.
+  //   2. Human method: the totem is staged into a hotbar slot and
+  //      swapped into the offhand with the F-key swap packet
+  //      (block_dig status 6 = SWAP_ITEM_WITH_OFFHAND) — the exact
+  //      packet a vanilla client sends when a player presses F.
+  //      mineflayer 4.39 has no bot.swapHandItems(), and its equip()
+  //      route (two raw window clicks into slot 45) is kept only as a
+  //      fallback for when the swap cannot be performed.
+  // The refill never touches control states: the bot keeps fighting
+  // and moving through the whole window. It never drops/tosses.
+
+  function offhandSlotIdx () {
+    try { return bot.getEquipmentDestSlot('off-hand') } catch (e) { return 45 }
+  }
+
+  // NOTE: there is no attach-level items() helper in scope here (the
+  // existing items() helpers are locals of other functions) — read the
+  // inventory directly, like the pre-Round-5 offhand equip did.
+  function invItems () { return bot.inventory.items() }
+
+  function offhandHasTotem () {
+    const it = bot.inventory.slots[offhandSlotIdx()]
+    return !!(it && it.name === 'totem_of_undying')
+  }
+
+  function findSpareTotem () {
+    const off = offhandSlotIdx()
+    return invItems().find(i => i.name === 'totem_of_undying' && i.slot !== off) || null
+  }
+
+  // Stamp a totem pop: starts the human-delay clock. Called by the
+  // decision-loop detector and by bot.js's entity_status handler;
+  // deduped so both reporting the same pop is harmless.
+  function noteTotemPop () {
+    const now = Date.now()
+    if (brain.totemRefillWanted && now - brain.lastTotemPopAt < 3000) return
+    brain.lastTotemPopAt = now
+    brain.stats.totemPops++
+    const min = brain.totemRefillMinMs > 0 ? brain.totemRefillMinMs : TOTEM_REFILL_MIN_MS
+    const max = brain.totemRefillMaxMs > 0 ? brain.totemRefillMaxMs : TOTEM_REFILL_MAX_MS
+    brain.totemRefillDueAt = now + min + Math.random() * Math.max(0, max - min)
+    brain.totemRefillWanted = true
+    brain.totemStagedSlot = -1
+    logEvent(`totem popped — offhand refill due in ~${Math.round(brain.totemRefillDueAt - now)} ms (human-paced)`)
+  }
+
+  // Ask for an offhand totem refill. Returns a promise resolving true
+  // when the offhand holds a totem, false when the refill is deferred
+  // (delay still running — the decision-loop upkeep will land it) or
+  // impossible (no spare totem).
+  function requestTotemRefill (source) {
+    if (offhandHasTotem()) { brain.totemRefillWanted = false; return Promise.resolve(true) }
+    if (!findSpareTotem()) { brain.totemRefillWanted = false; return Promise.resolve(false) }
+    brain.totemRefillWanted = true
+    const now = Date.now()
+    // No recent pop → no human delay is owed: due immediately.
+    if (!brain.lastTotemPopAt || now - brain.lastTotemPopAt > TOTEM_REFILL_MAX_MS) {
+      brain.totemRefillDueAt = now
+    } else if (!brain.totemRefillDueAt) {
+      brain.totemRefillDueAt = now
     }
+    return maybePerformTotemRefill()
+  }
+
+  // Get a totem into a hotbar slot (the "staging" step), so the refill
+  // itself is a single F-key press when the delay ends. Safe to call
+  // during the wait window; a no-op once staged. Only ever MOVES items
+  // between inventory slots — nothing is dropped.
+  async function stageTotemForRefill (fromPerform) {
+    if (!fromPerform && brain.totemRefillBusy) return -1
+    if (brain.busy || brain.eating) return -1
+    if (brain.mode !== 'fight' && brain.mode !== 'idle') return -1
+    if (brain.totemStagedSlot >= 36 && brain.totemStagedSlot <= 44) {
+      const cur = bot.inventory.slots[brain.totemStagedSlot]
+      if (cur && cur.name === 'totem_of_undying') return brain.totemStagedSlot
+      brain.totemStagedSlot = -1
+    }
+    const held = bot.heldItem
+    if (held && held.name === 'totem_of_undying') { brain.totemStagedSlot = held.slot; return held.slot }
+    const hot = invItems().find(i => i.name === 'totem_of_undying' && i.slot >= 36 && i.slot <= 44)
+    if (hot) { brain.totemStagedSlot = hot.slot; return hot.slot }
+    const spare = findSpareTotem()
+    if (!spare) return -1
+    // Prefer empty slots at the far end of the hotbar; never slot 36
+    // (index 0, the sword) and avoid the currently selected slot so
+    // the bot keeps its weapon in hand during the move.
+    const candidates = [44, 43, 42, 41, 40, 39, 38, 37]
+    let dest = candidates.find(s => !bot.inventory.slots[s])
+    if (dest === undefined) dest = candidates.find(s => s !== 36 + (bot.quickBarSlot || 0))
+    if (dest === undefined) return -1
+    try { await bot.moveSlotItem(spare.slot, dest) } catch (e) { return -1 }
+    const landed = bot.inventory.slots[dest]
+    if (landed && landed.name === 'totem_of_undying') { brain.totemStagedSlot = dest; return dest }
+    return -1
+  }
+
+  // Perform the refill (the delay has already elapsed): select the
+  // staged totem like a player tapping its number key, press F
+  // (block_dig status 6), then put the weapon back in hand.
+  async function performTotemRefill () {
+    const prevQuick = (typeof bot.quickBarSlot === 'number') ? bot.quickBarSlot : 0
+    const staged = await stageTotemForRefill(true)
+    let swapped = false
+    if (staged >= 36 && staged <= 44 && bot._client) {
+      for (let attempt = 0; attempt < 2 && !swapped; attempt++) {
+        if (offhandHasTotem()) { swapped = true; break }
+        const cur = bot.inventory.slots[staged]
+        if (!cur || cur.name !== 'totem_of_undying') break
+        if (bot.quickBarSlot !== staged - 36) {
+          bot.setQuickBarSlot(staged - 36)
+          await sleep(120 + Math.random() * 130)
+        }
+        const heldNow = bot.heldItem
+        if (!heldNow || heldNow.name !== 'totem_of_undying') break
+        try {
+          bot._client.write('block_dig', { status: 6, location: { x: 0, y: 0, z: 0 }, face: 0 })
+        } catch (e) { break }
+        const t0 = Date.now()
+        while (Date.now() - t0 < 1200) {
+          if (offhandHasTotem()) { swapped = true; break }
+          await sleep(50)
+        }
+      }
+    }
+    if (swapped) {
+      brain.stats.totemRefillsSwap++
+      logEvent('totem refilled into offhand (F-key swap)')
+    } else {
+      // Fallback: the pre-Round-5 equip() route (raw window clicks
+      // into the offhand slot). Still behind the same delay + gates —
+      // used only when the swap route could not be performed.
+      const totem = findSpareTotem()
+      if (totem) { try { await bot.equip(totem, 'off-hand') } catch (e) {} }
+      if (offhandHasTotem()) {
+        brain.stats.totemRefillsFallback++
+        logEvent('totem refilled into offhand (FALLBACK equip route)')
+      }
+    }
+    const done = offhandHasTotem()
+    if (done) {
+      brain.totemRefillWanted = false
+      brain.offhandWasTotem = true
+      brain.totemStagedSlot = -1
+      await sleep(100 + Math.random() * 100)
+      // Restore the hand: the sword in a fight, the previous hotbar
+      // selection when idle.
+      if (brain.mode === 'fight') {
+        const sword = findSwordItem()
+        if (sword && (!bot.heldItem || bot.heldItem.name !== sword.name)) {
+          try { await bot.equip(sword, 'hand') } catch (e) {}
+        }
+      } else if (typeof bot.quickBarSlot === 'number' && bot.quickBarSlot !== prevQuick) {
+        try { bot.setQuickBarSlot(prevQuick) } catch (e) {}
+      }
+    }
+    return done
+  }
+
+  // The gate every refill passes through: wanted, delay elapsed, and
+  // the bot not mid-action (busy/eating/climb). Runs in
+  // fight and idle modes only — during 'block' the offhand is the
+  // shield, and endBlock asks for the refill when the block ends.
+  async function maybePerformTotemRefill () {
+    if (!brain.totemRefillWanted || brain.totemRefillBusy) return false
+    if (Date.now() < brain.totemRefillDueAt) return false
+    if (brain.busy || brain.eating || brain.ladderBusy) return false
+    if (brain.mode !== 'fight' && brain.mode !== 'idle') return false
+    if (!bot.entity || bot.health <= 0) return false
+    if (offhandHasTotem()) { brain.totemRefillWanted = false; return true }
+    if (!findSpareTotem()) { brain.totemRefillWanted = false; return false }
+    brain.totemRefillBusy = true
+    try { return await performTotemRefill() } finally { brain.totemRefillBusy = false }
   }
 
   // ------------------------------------------------------------- fight start
@@ -1784,7 +1982,11 @@ function attachPvpBrain (bot, opts = {}) {
     brain.block = null
     brain.mode = 'idle'
     logEvent('shield block ended: ' + why)
-    equipTotemOffhand().catch(() => {}) // back to the usual idle offhand
+    // Round 5: back to the usual idle offhand — via the choke point
+    // (the F-key swap exchanges the shield for the staged totem; if a
+    // totem popped just before the block, the human delay still runs
+    // and the upkeep lands the refill when it elapses).
+    requestTotemRefill('block-end').catch(() => {})
   }
   brain.endBlock = endBlock
 
@@ -2736,6 +2938,26 @@ function attachPvpBrain (bot, opts = {}) {
       brain.lastSwapCheckAt = now
       if (brain.mode !== 'combo' && brain.mode !== 'lunge-test') checkArmorSwap().catch(() => {})
     }
+    // Round 5: totem pop detection + refill upkeep — runs in EVERY
+    // mode (it used to live inside the fight branch only, so a pop
+    // near a fight's end could stall or be bypassed). A pop = the
+    // offhand held a totem at the last check and is now EMPTY (a
+    // shield sliding into the offhand is not a pop). The refill goes
+    // through the choke point: staged during the wait, landed by the
+    // F-key swap once the human delay elapses.
+    if (now - brain.lastTotemCheckAt > 400) {
+      brain.lastTotemCheckAt = now
+      const offItem = bot.inventory.slots[offhandSlotIdx()]
+      const hasTotem = !!(offItem && offItem.name === 'totem_of_undying')
+      if (!hasTotem && brain.offhandWasTotem && offItem == null && bot.health > 0) {
+        noteTotemPop()
+      }
+      brain.offhandWasTotem = hasTotem
+      if (brain.totemRefillWanted && Date.now() < brain.totemRefillDueAt) {
+        stageTotemForRefill().catch(() => {})
+      }
+    }
+    maybePerformTotemRefill().catch(() => {})
     // safe-moment repair: idle + a Mending piece down to <=10% durability
     // remaining (fix round 2 trigger) + bottles at hand. This one trigger
     // covers most of Rafi's automatic-repair spec: the bot is idle between
@@ -2842,29 +3064,9 @@ function attachPvpBrain (bot, opts = {}) {
       if (brain.target) registerOpponent(brain.target)
       const oppCount = recentOpponentCount(now)
       if (oppCount >= 2) { if (!brain.specialSince) brain.specialSince = now } else brain.specialSince = 0
-      // totem upkeep (+ pop detection)
-      if (now - brain.lastTotemCheckAt > 400) {
-        brain.lastTotemCheckAt = now
-        const off = bot.inventory.slots[bot.getEquipmentDestSlot('off-hand')]
-        const hasTotem = off && off.name === 'totem_of_undying'
-        if (!hasTotem && brain.offhandWasTotem && bot.health > 0) {
-          brain.stats.totemPops++
-          logEvent('totem popped — re-equipping')
-        }
-        brain.offhandWasTotem = !!hasTotem
-        if (hasTotem) {
-          brain.totemReequipAt = 0
-        } else if (!brain.totemReequipAt) {
-          // Fix round 3b: TotemGuard flagged the bot's INSTANT totem
-          // re-equip (AutoTotemA, VL 3/4 in Rafi's live test). A human
-          // needs a moment to swap a fresh totem in — wait a randomized
-          // 500-1100 ms before re-equipping.
-          brain.totemReequipAt = now + rand(500, 1100)
-        } else if (now >= brain.totemReequipAt) {
-          brain.totemReequipAt = 0
-          equipTotemOffhand().catch(() => {})
-        }
-      }
+      // (Totem pop detection + refill upkeep moved to the always-run
+      // section of this loop in Round 5 — see below. The choke point
+      // owns every offhand refill now.)
       // pearl-out threat scan
       const held = targetHeldName()
       if (held === 'end_crystal' || held === 'respawn_anchor') {
@@ -3008,6 +3210,13 @@ function attachPvpBrain (bot, opts = {}) {
     brain.fightClockExpiresAt = 0
     brain.maceLockTargetId = null
     brain.multiCrystalDone = false
+    // Round 5: death wipes any pending totem refill — the pop clock
+    // must not leak across a respawn.
+    brain.lastTotemPopAt = 0
+    brain.totemRefillDueAt = 0
+    brain.totemRefillWanted = false
+    brain.totemStagedSlot = -1
+    brain.offhandWasTotem = false
     brain.mode = 'idle'
     brain.target = null
     clearControls()
