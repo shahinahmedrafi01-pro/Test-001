@@ -220,12 +220,15 @@ function startBot () {
   })
 
   // Totem pop detection: entity_status 35 on our own entity = a totem just
-  // popped. While the PvP brain is fighting it re-equips the offhand
-  // itself; the Madara refill below only runs while idle.
+  // popped. Round 5: the pop is stamped into the PvP brain in ANY mode —
+  // the brain's single choke point (delayed, F-key swap) owns every
+  // offhand refill now. The debounced refill below only tops up the
+  // MAIN hand while idle, as before.
   bot._client.on('entity_status', (packet) => {
     try {
       if (!bot || !bot.entity) return
       if (packet.entityId === bot.entity.id && packet.entityStatus === 35) {
+        if (brain && brain.noteTotemPop) { try { brain.noteTotemPop() } catch (e) {} }
         if (!brainBusy()) {
           log('Totem popped! Scheduling replacement...')
           scheduleTotemRefill()
@@ -317,13 +320,26 @@ function findSpareTotem () {
 
 // One refill pass: offhand first (survival priority), then main hand.
 // Lock-guarded so repeated pops can never overlap; no totems -> do nothing.
+// Round 5: the OFFHAND refill is delegated to the brain's choke point
+// (brain.requestTotemRefill — delayed after a pop, F-key swap method).
+// bot.js no longer equips a totem into the offhand itself; the main-hand
+// top-up below is unchanged (idle-only, debounced, not the flagged
+// pattern).
 async function refillTotems () {
   if (totemRefillBusy) return
   if (!bot || !bot.entity || !bot.inventory) return
   if (brainBusy()) return // the brain owns the hands while active
   totemRefillBusy = true
   try {
-    for (const dest of ['off-hand', 'hand']) {
+    if (!handHasTotem('off-hand')) {
+      if (brain && brain.requestTotemRefill) {
+        try { await brain.requestTotemRefill('idle') } catch (e) {}
+      } else if (findSpareTotem()) {
+        // Brain not attached (should not happen): keep the old route.
+        try { await bot.equip(findSpareTotem(), 'off-hand'); log('Auto-totem: equipped totem to off-hand.') } catch (e) {}
+      }
+    }
+    for (const dest of ['hand']) {
       if (handHasTotem(dest)) continue
       const totem = findSpareTotem()
       if (!totem) {
