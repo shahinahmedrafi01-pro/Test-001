@@ -8,10 +8,9 @@
 //   Discord #bot-panel  -> parsePanelCommand(text)
 //   In-game /msg        -> parseWhisperCommand(text)
 //
-// REMOVED panel commands (Rafi's order — extras OFF): the live bot's
-// `!p` / `playerlist` and `!s` / `status` (image cards) are NOT parsed
-// here; they fall through to { type: 'unknown-command' } and the panel
-// answers with the PvP command list instead.
+// Panel info cards (restored 2026-11-21 on Rafi's order): `!p` /
+// `playerlist` and `!s` / `status` ARE parsed here again and answered by
+// bot.js with the image cards (auto-deleted after 1 minute).
 
 // ------------------------------------------------------------------ gates
 // Discord panel gate: the owner, plus the extra allowlisted Discord IDs
@@ -34,6 +33,8 @@ function isAllowedMcName (username, allowlist) {
 // Returns one of:
 //   { type: 'pvp', action: 'fight'|'combo', target: '<player>' }
 //   { type: 'pvp', action: 'stop'|'come' }
+//   { type: 'playerlist' }        — playerlist / !players / !p (card, restored)
+//   { type: 'status' }            — status / !s (card, restored)
 //   { type: 'say', text }          — !say <msg>  (panel basic, kept)
 //   { type: 'cmd', text }          — !cmd <cmd>  (panel basic, kept; text has no leading /)
 //   { type: 'relay', text }        — plain message -> game chat (bridge basic, kept)
@@ -43,6 +44,11 @@ function parsePanelCommand (raw) {
   const text = String(raw || '').trim()
   if (!text) return { type: 'ignore' }
   const low = text.toLowerCase()
+
+  // Info cards (restored 2026-11-21): exact matches, checked before the
+  // !pvp family so '!p' can never be swallowed by it.
+  if (low === 'playerlist' || low === '!players' || low === '!p') return { type: 'playerlist' }
+  if (low === 'status' || low === '!s') return { type: 'status' }
 
   if (low === '!pvp stop') return { type: 'pvp', action: 'stop' }
   if (low === '!pvp come') return { type: 'pvp', action: 'come' }
